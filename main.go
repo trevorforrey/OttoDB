@@ -26,13 +26,14 @@ type RBTree struct {
 	root *node
 }
 
-func (tree *RBTree) Insert(root *node, newKV record) {
+func (tree *RBTree) Insert(newKV record) {
 	newNode := node{}
 	newNode.data = newKV
+	newNode.color = Red
 
-	root = tree.insertHelper(root, &newNode)
+	tree.insertHelper(tree.root, &newNode)
 
-	//tree.fixViolation(newNode)
+	tree.fixViolation(&newNode)
 }
 
 func (tree *RBTree) insertHelper(root *node, newNode *node) *node {
@@ -52,6 +53,57 @@ func (tree *RBTree) insertHelper(root *node, newNode *node) *node {
 	}
 
 	return root
+}
+
+func (tree *RBTree) fixViolation(newNode *node) {
+	fmt.Println("Starting to fix the violation")
+	for newNode.parent != nil && newNode.parent.color == Red { //newNode.parent.color called on root node returning error
+		fmt.Println("In loop")
+		if newNode.parent == newNode.parent.parent.left {
+			fmt.Println("parent is left child")
+			uncle := newNode.parent.parent.right
+			if uncle.color == Red {
+				fmt.Println("uncle is red")
+				newNode.parent.color = Black
+				uncle.color = Black
+				newNode.parent.parent.color = Red
+				newNode = newNode.parent.parent
+			} else {
+				fmt.Println("uncle is black")
+				if newNode == newNode.parent.right {
+					fmt.Println("new node is a left child")
+					newNode = newNode.parent
+					tree.leftRotate(newNode)
+				}
+				fmt.Println("new node is a right child")
+				newNode.parent.color = Black
+				newNode.parent.parent.color = Red
+				tree.rightRotate(newNode.parent.parent)
+			}
+		} else {
+			fmt.Println("parent is right child")
+			uncle := newNode.parent.parent.left
+			if uncle.color == Red {
+				fmt.Println("uncle is red")
+				newNode.parent.color = Black
+				uncle.color = Black
+				newNode.parent.parent.color = Red
+				newNode = newNode.parent.parent
+			} else {
+				fmt.Println("uncle is black")
+				if newNode == newNode.parent.left {
+					fmt.Println("new node is a left child")
+					newNode = newNode.parent
+					tree.leftRotate(newNode)
+				}
+				fmt.Println("new node is a right child")
+				newNode.parent.color = Black
+				newNode.parent.parent.color = Red
+				tree.rightRotate(newNode.parent.parent)
+			}
+		}
+	}
+	tree.root.color = Black
 }
 
 func (tree *RBTree) leftRotate(rotatingNode *node) {
@@ -105,7 +157,11 @@ func (tree *RBTree) inOrderTraversal(currNode *node) {
 
 	tree.inOrderTraversal(currNode.left)
 
-	fmt.Printf("%s ", currNode.data.key)
+	if currNode.color == Black {
+		fmt.Printf("%s: Black\n", currNode.data.key)
+	} else {
+		fmt.Printf("%s: Red\n", currNode.data.key)
+	}
 
 	tree.inOrderTraversal(currNode.right)
 }
@@ -136,24 +192,25 @@ func main() {
 	newRecordf.value = "value1"
 
 	fmt.Printf("Inserting key 2\n")
-	tree.Insert(tree.root, newRecord)
-
-	fmt.Printf("Inserting key 9\n")
-	tree.Insert(tree.root, newRecordz)
-
-	fmt.Printf("Inserting key 8\n")
-	tree.Insert(tree.root, newRecordf)
-
+	tree.Insert(newRecord)
 	tree.inOrderTraversal(tree.root)
 
-	fmt.Printf("root node is: %s", tree.root.data.key)
+	fmt.Printf("Inserting key 9\n")
+	tree.Insert(newRecordz)
+	tree.inOrderTraversal(tree.root)
 
-	tree.leftRotate(tree.root)
+	fmt.Printf("Inserting key 8\n")
+	tree.Insert(newRecordf)
+	tree.inOrderTraversal(tree.root)
 
-	fmt.Printf("root after left rotation: %s", tree.root.data.key)
+	// fmt.Printf("root node is: %s", tree.root.data.key)
 
-	tree.rightRotate(tree.root)
+	// tree.leftRotate(tree.root)
 
-	fmt.Printf("Root after right rotation: %s", tree.root.data.key)
+	// fmt.Printf("root after left rotation: %s", tree.root.data.key)
+
+	// tree.rightRotate(tree.root)
+
+	// fmt.Printf("Root after right rotation: %s", tree.root.data.key)
 
 }
