@@ -26,6 +26,17 @@ type RBTree struct {
 	root *node
 }
 
+func (tree *RBTree) Search(root *node, key string) *node {
+	if root == nil || key == root.data.key {
+		return root
+	}
+	if key < tree.root.data.key {
+		return tree.Search(root.left, key)
+	} else {
+		return tree.Search(root.right, key)
+	}
+}
+
 func (tree *RBTree) Insert(newKV record) {
 	newNode := node{}
 	newNode.data = newKV
@@ -150,6 +161,110 @@ func (tree *RBTree) rightRotate(rotatingNode *node) {
 	rotatingNode.parent = leftTree
 }
 
+func (tree *RBTree) transplant(u *node, v *node) {
+	if u.parent == nil {
+		tree.root = v
+	} else if u == u.parent.left {
+		u.parent.left = v
+	} else {
+		u.parent.right = v
+	}
+	v.parent = u.parent
+}
+
+func (tree *RBTree) getMinimum(currNode *node) *node {
+	for currNode.left != nil {
+		currNode = currNode.left
+	}
+	return currNode
+}
+
+func (tree *RBTree) Delete(delNode *node) {
+	copyNode := delNode
+	copyOriginalColor := delNode.color
+	var x *node
+
+	if delNode.left == nil {
+		x = delNode.right
+		tree.transplant(delNode, delNode.right)
+	} else if delNode.right == nil {
+		x = delNode.left
+		tree.transplant(delNode, delNode.left)
+	} else {
+		copyNode = tree.getMinimum(delNode.right)
+		copyOriginalColor = copyNode.color
+		x = copyNode.right
+		if copyNode.parent == delNode {
+			x.parent = copyNode
+		} else {
+			tree.transplant(copyNode, copyNode.right)
+			copyNode.right = delNode.right
+			copyNode.right.parent = copyNode
+		}
+		tree.transplant(delNode, copyNode)
+		copyNode.left = delNode.left
+		copyNode.left.parent = copyNode
+		copyNode.color = delNode.color
+	}
+	if copyOriginalColor == Black {
+		tree.deleteFixUp(x)
+	}
+}
+
+func (tree *RBTree) deleteFixUp(fixNode *node) {
+	for fixNode != tree.root && fixNode.color == Black {
+		if fixNode == fixNode.parent.left {
+			w := fixNode.parent.right
+			if w.color == Red {
+				w.color = Black
+				fixNode.parent.color = Red
+				tree.leftRotate(fixNode.parent)
+				w = fixNode.parent.right
+			}
+			if w.left.color == Black && w.right.color == Black {
+				w.color = Red
+				fixNode = fixNode.parent
+			} else {
+				if w.right.color == Black {
+					w.left.color = Black
+					w.color = Red
+					tree.rightRotate(w)
+					w = fixNode.parent.right
+				}
+				w.color = fixNode.parent.color
+				fixNode.parent.color = Black
+				w.right.color = Black
+				tree.leftRotate(fixNode.parent)
+				fixNode = tree.root
+			}
+		} else {
+			w := fixNode.parent.left
+			if w.color == Red {
+				w.color = Black
+				fixNode.parent.color = Red
+				tree.rightRotate(fixNode.parent)
+				w = fixNode.parent.left
+			}
+			if w.right.color == Black && w.left.color == Black {
+				w.color = Red
+				fixNode = fixNode.parent
+			} else {
+				if w.right.color == Black {
+					w.right.color = Black
+					w.color = Red
+					tree.leftRotate(w)
+					w = fixNode.parent.left
+				}
+				w.color = fixNode.parent.color
+				fixNode.parent.color = Black
+				w.left.color = Black
+				tree.rightRotate(fixNode.parent)
+				fixNode = tree.root
+			}
+		}
+	}
+}
+
 func (tree *RBTree) inOrderTraversal(currNode *node) {
 	if currNode == nil {
 		return
@@ -191,6 +306,10 @@ func main() {
 	newRecordf.key = "8"
 	newRecordf.value = "value1"
 
+	newRecorde := record{}
+	newRecorde.key = "3"
+	newRecorde.value = "value3"
+
 	fmt.Printf("Inserting key 2\n")
 	tree.Insert(newRecord)
 	tree.inOrderTraversal(tree.root)
@@ -201,6 +320,20 @@ func main() {
 
 	fmt.Printf("Inserting key 8\n")
 	tree.Insert(newRecordf)
+	tree.inOrderTraversal(tree.root)
+
+	fmt.Printf("Inserting key 3\n")
+	tree.Insert(newRecorde)
+	tree.inOrderTraversal(tree.root)
+
+	fmt.Printf("Deleting key 9\n")
+	nodeToDel := tree.Search(tree.root, "9")
+	tree.Delete(nodeToDel)
+	tree.inOrderTraversal(tree.root)
+
+	fmt.Printf("Deleting key 8\n")
+	nodeToDel = tree.Search(tree.root, "8")
+	tree.Delete(nodeToDel)
 	tree.inOrderTraversal(tree.root)
 
 	// fmt.Printf("root node is: %s", tree.root.data.key)
