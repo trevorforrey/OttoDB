@@ -169,7 +169,9 @@ func (tree *RBTree) transplant(u *node, v *node) {
 	} else {
 		u.parent.right = v
 	}
-	v.parent = u.parent
+	if v != nil {
+		v.parent = u.parent
+	}
 }
 
 func (tree *RBTree) getMinimum(currNode *node) *node {
@@ -333,6 +335,11 @@ func main() {
 
 	fmt.Printf("Deleting key 8\n")
 	nodeToDel = tree.Search(tree.root, "8")
+	tree.Delete(nodeToDel)
+	tree.inOrderTraversal(tree.root)
+
+	fmt.Printf("Deleting key 5\n")
+	nodeToDel = tree.Search(tree.root, "5")
 	tree.Delete(nodeToDel)
 	tree.inOrderTraversal(tree.root)
 
