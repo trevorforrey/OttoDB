@@ -1,4 +1,4 @@
-package main
+package rbTree
 
 import "fmt"
 
@@ -26,13 +26,44 @@ type RBTree struct {
 	root *node
 }
 
+func NewTree() *RBTree {
+	tree := RBTree{}
+	rootNode := node{}
+	rootNode.color = Black
+
+	rootData := record{}
+	rootData.key = "5"
+	rootData.value = "value2"
+
+	rootNode.data = rootData
+	tree.root = &rootNode
+	return &tree
+}
+
+func (tree *RBTree) Get(key string) string {
+	fmt.Println("About to start tree search")
+	getNode := tree.Search(tree.root, key)
+	fmt.Printf("Found key: %s\n", getNode.data.key)
+	fmt.Printf("Going to send value: %s\n", getNode.data.value)
+	return getNode.data.value
+}
+
+func (tree *RBTree) Set(key string, value string) {
+	var newRecord record
+	newRecord.key = key
+	newRecord.value = value
+	tree.Insert(newRecord)
+}
+
 func (tree *RBTree) Search(root *node, key string) *node {
 	if root == nil || key == root.data.key {
 		return root
 	}
 	if key < tree.root.data.key {
+		fmt.Println("key is less than root key")
 		return tree.Search(root.left, key)
 	} else {
+		fmt.Println("key is greater than root key")
 		return tree.Search(root.right, key)
 	}
 }
@@ -265,6 +296,10 @@ func (tree *RBTree) deleteFixUp(fixNode *node) {
 			}
 		}
 	}
+}
+
+func (tree *RBTree) InOrderTraversal() {
+	tree.inOrderTraversal(tree.root)
 }
 
 func (tree *RBTree) inOrderTraversal(currNode *node) {
