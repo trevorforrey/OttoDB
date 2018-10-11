@@ -293,6 +293,32 @@ func (tree *RBTree) deleteFixUp(fixNode *node) {
 	}
 }
 
+func (tree *RBTree) BreadthFirstTraversal() {
+	if tree.root == nil {
+		return
+	}
+	nodes := make([]node, 1)
+	nodes[0] = *tree.root
+	for len(nodes) != 0 {
+		currentNode := nodes[0]
+		if currentNode == *tree.root {
+			fmt.Printf("%s (%d)\n", currentNode.data.key, currentNode.color)
+		} else {
+			fmt.Printf("%s (%d) -> %s (%d)\n", currentNode.parent.data.key, currentNode.parent.color, currentNode.data.key, currentNode.color)
+		}
+		// Remove current element from the slice
+		nodes = append(nodes[:0], nodes[1:]...)
+		// Append nodes children, if non-nil
+		if currentNode.left != nil {
+			nodes = append(nodes, *currentNode.left)
+		}
+		if currentNode.right != nil {
+			nodes = append(nodes, *currentNode.right)
+		}
+	}
+
+}
+
 func (tree *RBTree) InOrderTraversal() {
 	tree.inOrderTraversal(tree.root)
 }
