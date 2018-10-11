@@ -28,15 +28,6 @@ type RBTree struct {
 
 func NewTree() *RBTree {
 	tree := RBTree{}
-	rootNode := node{}
-	rootNode.color = Black
-
-	rootData := record{}
-	rootData.key = "5"
-	rootData.value = "value2"
-
-	rootNode.data = rootData
-	tree.root = &rootNode
 	return &tree
 }
 
@@ -73,9 +64,13 @@ func (tree *RBTree) Insert(newKV record) {
 	newNode.data = newKV
 	newNode.color = Red
 
-	tree.insertHelper(tree.root, &newNode)
-
-	tree.fixViolation(&newNode)
+	if tree.root == nil {
+		newNode.color = Black
+		tree.root = &newNode
+	} else {
+		tree.insertHelper(tree.root, &newNode)
+		tree.fixViolation(&newNode)
+	}
 }
 
 func (tree *RBTree) insertHelper(root *node, newNode *node) *node {
