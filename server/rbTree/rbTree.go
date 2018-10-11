@@ -207,7 +207,12 @@ func (tree *RBTree) getMinimum(currNode *node) *node {
 	return currNode
 }
 
-func (tree *RBTree) Delete(delNode *node) {
+func (tree *RBTree) Delete(key string) {
+	delNode := tree.Search(tree.root, key)
+	tree.deleteNode(delNode)
+}
+
+func (tree *RBTree) deleteNode(delNode *node) {
 	copyNode := delNode
 	copyOriginalColor := delNode.color
 	var x *node
