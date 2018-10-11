@@ -99,12 +99,12 @@ func (tree *RBTree) insertHelper(root *node, newNode *node) *node {
 
 func (tree *RBTree) fixViolation(newNode *node) {
 	fmt.Println("Starting to fix the violation")
-	for newNode.parent != nil && newNode.parent.color == Red { //newNode.parent.color called on root node returning error
+	for newNode.parent != nil && newNode.parent.color == Red {
 		fmt.Println("In loop")
 		if newNode.parent == newNode.parent.parent.left {
 			fmt.Println("parent is left child")
 			uncle := newNode.parent.parent.right
-			if uncle.color == Red {
+			if uncle != nil && uncle.color == Red {
 				fmt.Println("uncle is red")
 				newNode.parent.color = Black
 				uncle.color = Black
@@ -125,7 +125,7 @@ func (tree *RBTree) fixViolation(newNode *node) {
 		} else {
 			fmt.Println("parent is right child")
 			uncle := newNode.parent.parent.left
-			if uncle.color == Red {
+			if uncle != nil && uncle.color == Red {
 				fmt.Println("uncle is red")
 				newNode.parent.color = Black
 				uncle.color = Black
@@ -136,12 +136,12 @@ func (tree *RBTree) fixViolation(newNode *node) {
 				if newNode == newNode.parent.left {
 					fmt.Println("new node is a left child")
 					newNode = newNode.parent
-					tree.leftRotate(newNode)
+					tree.rightRotate(newNode)
 				}
 				fmt.Println("new node is a right child")
 				newNode.parent.color = Black
 				newNode.parent.parent.color = Red
-				tree.rightRotate(newNode.parent.parent)
+				tree.leftRotate(newNode.parent.parent)
 			}
 		}
 	}
