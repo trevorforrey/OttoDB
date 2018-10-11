@@ -66,7 +66,7 @@ func parseOp(fullOp string) (operation, error) {
 	splitOps := strings.Fields(fullOp)
 	var newOp operation
 	newOp.op = splitOps[0]
-	if newOp.op == "GET" || newOp.op == "SET" {
+	if newOp.op == "GET" || newOp.op == "SET" || newOp.op == "DEL" {
 		newOp.key = splitOps[1]
 	}
 	if newOp.op == "SET" {
@@ -98,6 +98,12 @@ func performOp(op operation) (string, error) {
 		tree.Set(op.key, op.value)
 		tree.InOrderTraversal()
 		return "set value in db\n", nil
+	} else if op.op == "DEL" {
+		fmt.Println("About to perform delete request")
+		fmt.Printf("Key: %s\n", op.key)
+		tree.Delete(op.key)
+		tree.InOrderTraversal()
+		return "deleted key in db\n", nil
 	} else if op.op == "QUIT" {
 		fmt.Println("About to quit and close connection")
 		return "connection closed\n", nil
