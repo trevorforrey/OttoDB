@@ -291,6 +291,7 @@ func (tree *RBTree) deleteFixUp(fixNode *node) {
 			}
 		}
 	}
+	fixNode.color = Black
 }
 
 func (tree *RBTree) BreadthFirstTraversal() {
