@@ -26,6 +26,22 @@ func TestLevelOrderTraversal(t *testing.T) {
 	tree.BreadthFirstTraversal()
 }
 
+func TestSetToUpdate(t *testing.T) {
+	tree := NewTree()
+	tree.Set("goolash", "2")
+	tree.Set("piper", "1")
+
+	tree.Set("goolash", "3")
+	if tree.Get("goolash") != "3" {
+		t.Error("goolash value not updated")
+	}
+
+	tree.Set("piper", "4")
+	if tree.Get("piper") != "4" {
+		t.Error("piper value not updated")
+	}
+}
+
 func TestDeletion(t *testing.T) {
 	tree := NewTree()
 	tree.Set("goolash", "2")

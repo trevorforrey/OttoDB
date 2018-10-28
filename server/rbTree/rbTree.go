@@ -87,6 +87,8 @@ func (tree *RBTree) insertHelper(root *node, newNode *node) *node {
 		fmt.Println("new node key greater than root key")
 		root.right = tree.insertHelper(root.right, newNode)
 		root.right.parent = root
+	} else {
+		root.data.value = newNode.data.value
 	}
 
 	return root
