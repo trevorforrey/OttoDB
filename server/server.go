@@ -104,7 +104,7 @@ func performOp(op operation, client string) (string, error) {
 		fmt.Println("About to perform get request")
 		keyVal, err := tree.Get(op.key, timestamp)
 		if err != nil {
-			return "", err
+			return err.Error(), err
 		}
 		fmt.Printf("Retrieved %s from tree\n", keyVal)
 		sb.WriteString(keyVal)

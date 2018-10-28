@@ -42,6 +42,9 @@ func NewTree() *RBTree {
 func (tree *RBTree) Get(key string, timestamp int64) (string, error) {
 	fmt.Println("About to start tree search")
 	getNode := tree.Search(tree.root, key)
+	if getNode == nil {
+		return "no value found", errors.New("No value found")
+	}
 	recordList := getNode.data.records
 	fmt.Printf("Found key: %s\n", getNode.data.key)
 
