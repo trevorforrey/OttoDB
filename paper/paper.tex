@@ -1,0 +1,328 @@
+\documentclass[conference]{IEEEtran}
+    \IEEEoverridecommandlockouts
+    % The preceding line is only needed to identify funding in the first footnote. If that is unneeded, please comment it out.
+    \usepackage{cite}
+    \usepackage{amsmath,amssymb,amsfonts}
+    \usepackage{algorithmic}
+    \usepackage{graphicx}
+    \usepackage{textcomp}
+    \usepackage{xcolor}
+    \def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+        T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+    \begin{document}
+    
+    \title{OttoDB - A resilient key-value data store\\
+    {\footnotesize \textsuperscript{*}Note: Project Proposal}
+    }
+    
+    \author{\IEEEauthorblockN{1\textsuperscript{st} Trevor Forrey}
+    \IEEEauthorblockA{\textit{Software Engineering} \\
+    \textit{Master's Software Engineering Program}\\
+    Phoenix, United States \\
+    trevor4e@gmail.com}
+    }
+    
+    \maketitle
+    
+
+    % Summarize your project in 100-250 words. (You do not have to provide an abstract for
+    % your project proposal.)
+    \begin{abstract}
+    N/A
+    \end{abstract}
+    
+    % \begin{IEEEkeywords}
+    % component, formatting, style, styling, insert
+    % \end{IEEEkeywords}
+    
+
+    % The introduction should describe your project idea. You should
+    % clearly state the question you are investigating. Provide an explanation about why you think this is
+    % an interesting question and why others might be interested in your (anticipated) results, i.e., provide
+    % some motivation for your work.
+    \section{Introduction and Motivation}
+    Many modern applications utilize key-value databases to store data. Whether for quick cache storage or a simple mapping of values. Many key-value stores have come up as contending solutions in this space: Redis \cite{b1}, CouchBase \cite{b3}, HBase \cite{b4}, Boltdb \cite{b5}, and many others \cite{b6, b7, b8}. These applications vary in performance and storage/operational guarantees (persistent storage, transactional guarantees). OttoDB was created to help learn about data storage architectures, concurrency control strategies, persistence, and what goes into providing transactional guarantees. 
+
+    In many applications, data storage operations tend to be the bottleneck of an application. Because of this, almost every data storage service allows for concurrent processing of requests. Instead of using locks on records before reading or writing, OttoDB utilizes optimistic concurrency control through MVCC (Multi-Version Concurrency Control) to decrease the effects concurrent transactions have on response times. Instead of records holding a single value that gets changed, they hold a collection of values versioned with a timestamp.
+
+    Writing applications against data storage systems that handle concurrent requests can be difficult. In order to ease those difficulties, many databases offer transactions. Although transactions appear in many databases, they aren’t supported as much in the key-value store space as in traditional databases. Some key-value stores that offer transactions don’t implement rollbacks or any atomic guarantees \cite{b1}. OttoDB provides a consistent-read level of isolation and atomic commits in its transactional support.
+
+    \subsection{Protocol}
+
+    OttoDB supports a similar protocol as Redis \cite{b1}, but with a smaller variability of data stored; OttoDB currently only supports keys and values as strings. The following operations OttoDB supports are shown below.
+
+    \begin{itemize}
+        \item BEGIN - Starts a transaction with the client, all future requests are scoped to the transaction.
+        \item COMMIT - Lets OttoDB know you’re ready to commit the transaction to the store
+        \item GET \textit{key} - Returns the string value of the \textit{key}, if it exists. If not, returns an empty string
+        \item SET \textit{key} \textit{value} - Sets \textit{value} to \textit{key} in the database or updates previously set key, returns message ‘OK’
+        \item DEL \textit{key} - Deletes a record in the database associated with the provided \textit{key}, returns message ‘OK’ on success
+        \item QUIT - Kills the active TCP connection with the database
+    \end{itemize}
+
+    Similar to Redis \cite{b1}, all requests are terminated with an {\textbackslash}r{\textbackslash}n string. 
+
+    % Related work falls in two categories. Background readings are those that are required
+    % for you to understand the area and problem you are tackling.
+    % The other category of related work is contextual work. This includes prior work upon which you may
+    % be building, the work of others who may be solving the same problem you are but doing so in different
+    % ways, and work in adjacent areas that influences what you plan to do or have done. The purpose of this
+    % part of the related work section is to help a reader place your work in context, in order to understand
+    % your results.
+    % While you need not have conducted a full literature search by the time that you submit your proposal,
+    % you should know what work is out there and in what areas you need to be looking.
+    \section{Related Work}
+    OttoDB is not alone in its implementations or novel in strategies used to develop a highly concurrent key-value store. OttoDB is heavily inspired by other database systems at the storage, concurrency control, transaction, and protocol levels. 
+
+    At the storage level, OttoDB utilizes the same concepts of many databases (RocksDB \cite{b6}, LevelDB \cite{b7}, HBase \cite{b4}) by keeping an in-memory self-balancing tree which read/write requests go to, and a LSM Tree of SSTables to organize data on disk. This algorithm was originally made popular in Google’s Bigtable paper \cite[p. 78]{b18}, and has since been implemented in many systems. 
+
+    At the concurrency control and transaction level, OttoDB is the most similar to CockroachDB \cite{b8}, in the fact that both utilize optimistic concurrency control through MVCC. Due to CockroachDB’s distributed nature, their implementation is much different and requires more coordination. Despite this difference, CockroachDB’s documentation has been tremendously helpful in learning about MVCC and supporting transactions on top of it. 
+
+	As mentioned earlier, OttoDB's protocol is directly inspired from that of Redis \cite{b1}. OttoDB’s protocol is much simpler than that of Redis however; responses are simple strings, and not prefixed with an identifier. OttoDB only supports operations on key value strings, while Redis allows for a wider range of data types: Lists, Hashes, Sets, and many more \cite{b11}.
+
+
+    % For the proposal, what experiments do you plan to conduct and why? What
+    % question is each experiment designed to answer? What do you hope to learn from each experiment?
+    % What equipment, software, or tools do you need? What tests will you conduct conditionally? (For
+    % example, if we learn X from experiment 1 then we must do A else we’ll do B.) What problems do you
+    % expect?
+    % For the first draft and final project report, update this section to describe the status of your experimentation.
+    % Did you have to make any changes to your experimental strategy? If so, why?
+    \section{Experimental Set-up}
+    OttoDB will be tested by comparing read-heavy and write-heavy workloads to other popular key-value databases (Redis \cite{b1}, BoltDB \cite{b5}, HBase \cite{b4}). I’ll be testing high loads of sequential and concurrent requests to the databases, and measuring response times. Along with single-op requests, I’ll also test transactions with systems that provide transactional support. Along with measuring response times, I’ll also measure the correctness of the data. I’ll be performing these tests by writing clients in Go that spawn sequential/concurrent requests, and utilize Go’s benchmarking tools as experiment output. From these experiments, I’m hoping to better understand the type of application where OttoDB is a good fit. 
+
+    % For the proposal, what sorts of results do you expect to observe? Obviously, you do not
+    % know what the results are in advance, but you should know the format of those results. For example, if
+    % you are comparing two systems, you would expect to be able to say things like, “System A outperforms
+    % system B in these circumstances.” Naturally, after you have completed the experimentation, you should
+    % also be able to explain why.
+    \section{Results}
+    I fully expect Redis \cite{b1} and other key value stores to outperform OttoDB, due to their maturity and highly skilled creators. The only area I’m expecting to see OttoDB outperform some current applications is in workloads with heavy random writes (due to the LSM Tree / SSTable storage layer). Seeing the differences between current systems and my own, I’ll try to argue that the stricter transactional capabilities of OttoDB and on-disk persistence are worth the performance drop, and can meet a specific application need.
+
+    % Provide an honest summary of your work and the
+    % conclusions you can draw from it. State any shortcomings, and discuss follow-on work.
+    \section{Summary, Conclusions, and Future Work}
+    N/A
+
+    % \subsection{Maintaining the Integrity of the Specifications}
+    
+    % The IEEEtran class file is used to format your paper and style the text. All margins, 
+    % column widths, line spaces, and text fonts are prescribed; please do not 
+    % alter them. You may note peculiarities. For example, the head margin
+    % measures proportionately more than is customary. This measurement 
+    % and others are deliberate, using specifications that anticipate your paper 
+    % as one part of the entire proceedings, and not as an independent document. 
+    % Please do not revise any of the current designations.
+    
+    % \section{Prepare Your Paper Before Styling}
+    % Before you begin to format your paper, first write and save the content as a 
+    % separate text file. Complete all content and organizational editing before 
+    % formatting. Please note sections \ref{AA}--\ref{SCM} below for more information on 
+    % proofreading, spelling and grammar.
+    
+    % Keep your text and graphic files separate until after the text has been 
+    % formatted and styled. Do not number text heads---{\LaTeX} will do that 
+    % for you.
+    
+    % \subsection{Abbreviations and Acronyms}\label{AA}
+    % Define abbreviations and acronyms the first time they are used in the text, 
+    % even after they have been defined in the abstract. Abbreviations such as 
+    % IEEE, SI, MKS, CGS, ac, dc, and rms do not have to be defined. Do not use 
+    % abbreviations in the title or heads unless they are unavoidable.
+    
+    % \subsection{Units}
+    % \begin{itemize}
+    % \item Use either SI (MKS) or CGS as primary units. (SI units are encouraged.) English units may be used as secondary units (in parentheses). An exception would be the use of English units as identifiers in trade, such as ``3.5-inch disk drive''.
+    % \item Avoid combining SI and CGS units, such as current in amperes and magnetic field in oersteds. This often leads to confusion because equations do not balance dimensionally. If you must use mixed units, clearly state the units for each quantity that you use in an equation.
+    % \item Do not mix complete spellings and abbreviations of units: ``Wb/m\textsuperscript{2}'' or ``webers per square meter'', not ``webers/m\textsuperscript{2}''. Spell out units when they appear in text: ``. . . a few henries'', not ``. . . a few H''.
+    % \item Use a zero before decimal points: ``0.25'', not ``.25''. Use ``cm\textsuperscript{3}'', not ``cc''.)
+    % \end{itemize}
+    
+    % \subsection{Equations}
+    % Number equations consecutively. To make your 
+    % equations more compact, you may use the solidus (~/~), the exp function, or 
+    % appropriate exponents. Italicize Roman symbols for quantities and variables, 
+    % but not Greek symbols. Use a long dash rather than a hyphen for a minus 
+    % sign. Punctuate equations with commas or periods when they are part of a 
+    % sentence, as in:
+    % \begin{equation}
+    % a+b=\gamma\label{eq}
+    % \end{equation}
+    
+    % Be sure that the 
+    % symbols in your equation have been defined before or immediately following 
+    % the equation. Use ``\eqref{eq}'', not ``Eq.~\eqref{eq}'' or ``equation \eqref{eq}'', except at 
+    % the beginning of a sentence: ``Equation \eqref{eq} is . . .''
+    
+    % \subsection{\LaTeX-Specific Advice}
+    
+    % Please use ``soft'' (e.g., \verb|\eqref{Eq}|) cross references instead
+    % of ``hard'' references (e.g., \verb|(1)|). That will make it possible
+    % to combine sections, add equations, or change the order of figures or
+    % citations without having to go through the file line by line.
+    
+    % Please don't use the \verb|{eqnarray}| equation environment. Use
+    % \verb|{align}| or \verb|{IEEEeqnarray}| instead. The \verb|{eqnarray}|
+    % environment leaves unsightly spaces around relation symbols.
+    
+    % Please note that the \verb|{subequations}| environment in {\LaTeX}
+    % will increment the main equation counter even when there are no
+    % equation numbers displayed. If you forget that, you might write an
+    % article in which the equation numbers skip from (17) to (20), causing
+    % the copy editors to wonder if you've discovered a new method of
+    % counting.
+    
+    % {\BibTeX} does not work by magic. It doesn't get the bibliographic
+    % data from thin air but from .bib files. If you use {\BibTeX} to produce a
+    % bibliography you must send the .bib files. 
+    
+    % {\LaTeX} can't read your mind. If you assign the same label to a
+    % subsubsection and a table, you might find that Table I has been cross
+    % referenced as Table IV-B3. 
+    
+    % {\LaTeX} does not have precognitive abilities. If you put a
+    % \verb|\label| command before the command that updates the counter it's
+    % supposed to be using, the label will pick up the last counter to be
+    % cross referenced instead. In particular, a \verb|\label| command
+    % should not go before the caption of a figure or a table.
+    
+    % Do not use \verb|\nonumber| inside the \verb|{array}| environment. It
+    % will not stop equation numbers inside \verb|{array}| (there won't be
+    % any anyway) and it might stop a wanted equation number in the
+    % surrounding equation.
+    
+    % \subsection{Some Common Mistakes}\label{SCM}
+    % \begin{itemize}
+    % \item The word ``data'' is plural, not singular.
+    % \item The subscript for the permeability of vacuum $\mu_{0}$, and other common scientific constants, is zero with subscript formatting, not a lowercase letter ``o''.
+    % \item In American English, commas, semicolons, periods, question and exclamation marks are located within quotation marks only when a complete thought or name is cited, such as a title or full quotation. When quotation marks are used, instead of a bold or italic typeface, to highlight a word or phrase, punctuation should appear outside of the quotation marks. A parenthetical phrase or statement at the end of a sentence is punctuated outside of the closing parenthesis (like this). (A parenthetical sentence is punctuated within the parentheses.)
+    % \item A graph within a graph is an ``inset'', not an ``insert''. The word alternatively is preferred to the word ``alternately'' (unless you really mean something that alternates).
+    % \item Do not use the word ``essentially'' to mean ``approximately'' or ``effectively''.
+    % \item In your paper title, if the words ``that uses'' can accurately replace the word ``using'', capitalize the ``u''; if not, keep using lower-cased.
+    % \item Be aware of the different meanings of the homophones ``affect'' and ``effect'', ``complement'' and ``compliment'', ``discreet'' and ``discrete'', ``principal'' and ``principle''.
+    % \item Do not confuse ``imply'' and ``infer''.
+    % \item The prefix ``non'' is not a word; it should be joined to the word it modifies, usually without a hyphen.
+    % \item There is no period after the ``et'' in the Latin abbreviation ``et al.''.
+    % \item The abbreviation ``i.e.'' means ``that is'', and the abbreviation ``e.g.'' means ``for example''.
+    % \end{itemize}
+    % An excellent style manual for science writers is \cite{b7}.
+    
+    % \subsection{Authors and Affiliations}
+    % \textbf{The class file is designed for, but not limited to, six authors.} A 
+    % minimum of one author is required for all conference articles. Author names 
+    % should be listed starting from left to right and then moving down to the 
+    % next line. This is the author sequence that will be used in future citations 
+    % and by indexing services. Names should not be listed in columns nor group by 
+    % affiliation. Please keep your affiliations as succinct as possible (for 
+    % example, do not differentiate among departments of the same organization).
+    
+    % \subsection{Identify the Headings}
+    % Headings, or heads, are organizational devices that guide the reader through 
+    % your paper. There are two types: component heads and text heads.
+    
+    % Component heads identify the different components of your paper and are not 
+    % topically subordinate to each other. Examples include Acknowledgments and 
+    % References and, for these, the correct style to use is ``Heading 5''. Use 
+    % ``figure caption'' for your Figure captions, and ``table head'' for your 
+    % table title. Run-in heads, such as ``Abstract'', will require you to apply a 
+    % style (in this case, italic) in addition to the style provided by the drop 
+    % down menu to differentiate the head from the text.
+    
+    % Text heads organize the topics on a relational, hierarchical basis. For 
+    % example, the paper title is the primary text head because all subsequent 
+    % material relates and elaborates on this one topic. If there are two or more 
+    % sub-topics, the next level head (uppercase Roman numerals) should be used 
+    % and, conversely, if there are not at least two sub-topics, then no subheads 
+    % should be introduced.
+    
+    % \subsection{Figures and Tables}
+    % \paragraph{Positioning Figures and Tables} Place figures and tables at the top and 
+    % bottom of columns. Avoid placing them in the middle of columns. Large 
+    % figures and tables may span across both columns. Figure captions should be 
+    % below the figures; table heads should appear above the tables. Insert 
+    % figures and tables after they are cited in the text. Use the abbreviation 
+    % ``Fig.~\ref{fig}'', even at the beginning of a sentence.
+    
+    % \begin{table}[htbp]
+    % \caption{Table Type Styles}
+    % \begin{center}
+    % \begin{tabular}{|c|c|c|c|}
+    % \hline
+    % \textbf{Table}&\multicolumn{3}{|c|}{\textbf{Table Column Head}} \\
+    % \cline{2-4} 
+    % \textbf{Head} & \textbf{\textit{Table column subhead}}& \textbf{\textit{Subhead}}& \textbf{\textit{Subhead}} \\
+    % \hline
+    % copy& More table copy$^{\mathrm{a}}$& &  \\
+    % \hline
+    % \multicolumn{4}{l}{$^{\mathrm{a}}$Sample of a Table footnote.}
+    % \end{tabular}
+    % \label{tab1}
+    % \end{center}
+    % \end{table}
+    
+    % \begin{figure}[htbp]
+    % %\centerline{\includegraphics{fig1.png}}
+    % \caption{Example of a figure caption.}
+    % \label{fig}
+    % \end{figure}
+    
+    % Figure Labels: Use 8 point Times New Roman for Figure labels. Use words 
+    % rather than symbols or abbreviations when writing Figure axis labels to 
+    % avoid confusing the reader. As an example, write the quantity 
+    % ``Magnetization'', or ``Magnetization, M'', not just ``M''. If including 
+    % units in the label, present them within parentheses. Do not label axes only 
+    % with units. In the example, write ``Magnetization (A/m)'' or ``Magnetization 
+    % \{A[m(1)]\}'', not just ``A/m''. Do not label axes with a ratio of 
+    % quantities and units. For example, write ``Temperature (K)'', not 
+    % ``Temperature/K''.
+    
+    % \section*{Acknowledgment}
+    
+    % The preferred spelling of the word ``acknowledgment'' in America is without 
+    % an ``e'' after the ``g''. Avoid the stilted expression ``one of us (R. B. 
+    % G.) thanks $\ldots$''. Instead, try ``R. B. G. thanks$\ldots$''. Put sponsor 
+    % acknowledgments in the unnumbered footnote on the first page.
+    
+    % \section*{References}
+    
+    % Please number citations consecutively within brackets \cite{b1}. The 
+    % sentence punctuation follows the bracket \cite{b2}. Refer simply to the reference 
+    % number, as in \cite{b3}---do not use ``Ref. \cite{b3}'' or ``reference \cite{b3}'' except at 
+    % the beginning of a sentence: ``Reference \cite{b3} was the first $\ldots$''
+    
+    % Number footnotes separately in superscripts. Place the actual footnote at 
+    % the bottom of the column in which it was cited. Do not put footnotes in the 
+    % abstract or reference list. Use letters for table footnotes.
+    
+    % Unless there are six authors or more give all authors' names; do not use 
+    % ``et al.''. Papers that have not been published, even if they have been 
+    % submitted for publication, should be cited as ``unpublished'' \cite{b4}. Papers 
+    % that have been accepted for publication should be cited as ``in press'' \cite{b5}. 
+    % Capitalize only the first word in a paper title, except for proper nouns and 
+    % element symbols.
+    
+    % For papers published in translation journals, please give the English 
+    % citation first, followed by the original foreign-language citation \cite{b6}.
+    
+    \begin{thebibliography}{00}
+    \bibitem{b1} “Redis” Redis. redis.io
+    \bibitem{b2} “Redis Protocol specification” Redis. redis.io/topics/protocol
+    \bibitem{b3} “Couchbase: NoSQL Engagement Database” Couchbase. couchbase.com
+    \bibitem{b4} “Apache HBase” Apache HBase. hbase.apache.org
+    \bibitem{b5} “An Embedded key/value database for Go. BoltDB. github.com/boltdb/bolt
+    \bibitem{b6} “RocksDB | A persistent key-value store” RocksDB. rocksdb.org
+    \bibitem{b7} “LevelDB” LevelDB. leveldb.org
+    \bibitem{b8} “Cockroach Labs” Cockroach Labs. cockroachlabs.com
+    \bibitem{b9} “Storage Layer | CockroachDB Docs” CockroachDB. cockroachlabs.com/docs/stable/architecture/storage-layer
+    \bibitem{b10} “Transaction Layer | CockroachDB Docs” CockroachDB. cockroachlabs.com/docs/stable/architecture/transaction-laye
+    \bibitem{b11} Redis datatypes - “An introduction to Redis data types and abstractions” Redis. redis.io/topics/data-types-intro.
+    \bibitem{b12} T. Palmer, "MVCC Part 1: An Overview", NuoDB, 2018. [Online]. Available: https://www.nuodb.com/techblog/mvcc-part-1-overview.
+    \bibitem{b13} T. Palmer, "MVCC Part 2: Pretty Pictures and Some Examples", NuoDB, 2018. [Online]. Available: https://www.nuodb.com/techblog/mvcc-part-2-pretty-pictures-and-some-examples.
+    \bibitem{b14} T. Palmer, "MVCC Part 3: Subtleties, Consistency, and Visibility", NuoDB, 2018. [Online]. Available: https://www.nuodb.com/techblog/mvcc-part-3-subtleties-consistency-and-visibility.
+    \bibitem{b15} T. Palmer, "MVCC Part 4: Distributed MVCC", NuoDB, 2018. [Online]. Available: https://www.nuodb.com/techblog/mvcc-part-4-distributed-mvcc.
+    \bibitem{b16} I. Katsov, "Implementation of MVCC Transactions for Key-Value Stores", Highly Scalable Blog, 2018. [Online]. Available: https://highlyscalable.wordpress.com/2012/01/07/mvcc-transactions-key-value/.
+    \bibitem{b17} E. Chance, "Implementing Your Own Transactions with MVCC", Elliot Chance, 2018. [Online]. Available: http://elliot.land/post/implementing-your-own-transactions-with-mvcc.
+    \bibitem{b18} M. Kleppmann, Designing data-intensive applications. 2017.
+    \end{thebibliography}
+    \end{document}
+    

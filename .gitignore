@@ -12,3 +12,13 @@
 *.out
 
 .vscode/launch.json
+
+# All the side paper files
+paper.aux
+paper.bcf
+paper.fdb_latexmk
+paper.fls
+paper.log
+paper.pdf
+paper.run.xml
+paper.synctex.gz
