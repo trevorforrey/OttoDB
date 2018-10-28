@@ -102,7 +102,10 @@ func performOp(op operation, client string) (string, error) {
 	} else if op.op == "GET" {
 		var sb strings.Builder
 		fmt.Println("About to perform get request")
-		keyVal := tree.Get(op.key)
+		keyVal, err := tree.Get(op.key, timestamp)
+		if err != nil {
+			return "", err
+		}
 		fmt.Printf("Retrieved %s from tree\n", keyVal)
 		sb.WriteString(keyVal)
 		sb.WriteString("\n")

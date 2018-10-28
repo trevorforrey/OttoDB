@@ -32,13 +32,15 @@ func TestSetToUpdate(t *testing.T) {
 	tree.Set("piper", "1", 1)
 
 	tree.Set("goolash", "3", 1)
-	if tree.Get("goolash") != "3" {
-		t.Error("goolash value not updated")
+	keyVal, err := tree.Get("goolash", 1)
+	if keyVal != "3" {
+		t.Error(err)
 	}
 
 	tree.Set("piper", "4", 1)
-	if tree.Get("piper") != "4" {
-		t.Error("piper value not updated")
+	keyVal, err = tree.Get("piper", 1)
+	if keyVal != "4" {
+		t.Error(err)
 	}
 }
 

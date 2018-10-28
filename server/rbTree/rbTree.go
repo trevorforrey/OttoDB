@@ -1,6 +1,9 @@
 package rbTree
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 type record struct {
 	value     string
@@ -36,13 +39,29 @@ func NewTree() *RBTree {
 	return &tree
 }
 
-func (tree *RBTree) Get(key string) string {
+func (tree *RBTree) Get(key string, timestamp int64) (string, error) {
 	fmt.Println("About to start tree search")
 	getNode := tree.Search(tree.root, key)
 	recordList := getNode.data.records
 	fmt.Printf("Found key: %s\n", getNode.data.key)
-	fmt.Printf("Going to send value: %s\n", recordList[len(recordList)-1].value)
-	return recordList[len(recordList)-1].value
+
+	// Find value scoped in current timestamp
+	var returnValue string
+	for i := len(recordList) - 1; i >= 0; i-- {
+		currRecord := recordList[i]
+		if timestamp >= currRecord.timestamp {
+			returnValue = currRecord.value
+			break
+		}
+	}
+
+	// If return value isn't string zero value, return proper value
+	if returnValue != "" {
+		fmt.Printf("Going to send value: %s\n", returnValue)
+		return returnValue, nil
+	}
+	return "no value found", errors.New("No value for provided timestamp")
+
 }
 
 func (tree *RBTree) Set(key string, value string, timestamp int64) {
