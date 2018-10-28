@@ -3,8 +3,13 @@ package rbTree
 import "fmt"
 
 type record struct {
-	key   string
-	value string
+	value     string
+	timestamp int64
+}
+
+type recordList struct {
+	key     string
+	records []record
 }
 
 type nodeColor int
@@ -16,7 +21,7 @@ const (
 
 type node struct {
 	color  nodeColor
-	data   record
+	data   recordList
 	left   *node
 	right  *node
 	parent *node
@@ -34,16 +39,20 @@ func NewTree() *RBTree {
 func (tree *RBTree) Get(key string) string {
 	fmt.Println("About to start tree search")
 	getNode := tree.Search(tree.root, key)
+	recordList := getNode.data.records
 	fmt.Printf("Found key: %s\n", getNode.data.key)
-	fmt.Printf("Going to send value: %s\n", getNode.data.value)
-	return getNode.data.value
+	fmt.Printf("Going to send value: %s\n", recordList[len(recordList)-1].value)
+	return recordList[len(recordList)-1].value
 }
 
-func (tree *RBTree) Set(key string, value string) {
+func (tree *RBTree) Set(key string, value string, timestamp int64) {
 	var newRecord record
-	newRecord.key = key
 	newRecord.value = value
-	tree.Insert(newRecord)
+	newRecord.timestamp = timestamp
+	var singleRecordList recordList
+	singleRecordList.key = key
+	singleRecordList.records = []record{newRecord}
+	tree.Insert(key, singleRecordList)
 }
 
 func (tree *RBTree) Search(root *node, key string) *node {
@@ -59,9 +68,9 @@ func (tree *RBTree) Search(root *node, key string) *node {
 	}
 }
 
-func (tree *RBTree) Insert(newKV record) {
+func (tree *RBTree) Insert(key string, singleRecordList recordList) {
 	newNode := node{}
-	newNode.data = newKV
+	newNode.data = singleRecordList
 	newNode.color = Red
 
 	if tree.root == nil {
@@ -88,7 +97,7 @@ func (tree *RBTree) insertHelper(root *node, newNode *node) *node {
 		root.right = tree.insertHelper(root.right, newNode)
 		root.right.parent = root
 	} else {
-		root.data.value = newNode.data.value
+		root.data.records = append(root.data.records, newNode.data.records[0])
 	}
 
 	return root
@@ -309,7 +318,7 @@ func (tree *RBTree) BreadthFirstTraversal() {
 	nodes[0] = *tree.root
 	for len(nodes) != 0 {
 		currentNode := nodes[0]
-		if currentNode == *tree.root {
+		if currentNode.data.key == (*tree).root.data.key {
 			fmt.Printf("%s (%d)\n", currentNode.data.key, currentNode.color)
 		} else {
 			fmt.Printf("%s (%d) -> %s (%d)\n", currentNode.parent.data.key, currentNode.parent.color, currentNode.data.key, currentNode.color)
