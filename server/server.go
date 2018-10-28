@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
 
 type operation struct {
@@ -16,8 +17,9 @@ type operation struct {
 }
 
 var (
-	tree     = rbTree.NewTree()
-	validOps = map[string]struct{}{"GET": {}, "SET": {}, "DEL": {}, "QUIT": {}, "BEGIN": {}, "COMMIT": {}}
+	tree               = rbTree.NewTree()
+	validOps           = map[string]struct{}{"GET": {}, "SET": {}, "DEL": {}, "QUIT": {}, "BEGIN": {}, "COMMIT": {}}
+	transactionManager = make(map[string]int64)
 )
 
 func main() {
@@ -29,6 +31,7 @@ func main() {
 	for {
 		conn, err := ln.Accept()
 		fmt.Println("Recieved a request")
+		fmt.Printf("From Remote: %v\n", conn.RemoteAddr())
 		if err != nil {
 			fmt.Printf("Error while accepting connection %s", err)
 		}
@@ -45,7 +48,7 @@ func handleConnection(conn net.Conn) {
 		if err != nil {
 			fmt.Printf("Error reading message from client: %s\n", err)
 		}
-		response, err := performOp(operation)
+		response, err := performOp(operation, conn.RemoteAddr().String())
 		if err != nil {
 			fmt.Printf("Error performing operation %s\n", err)
 		}
@@ -82,8 +85,21 @@ func parseOp(fullOp string) (operation, error) {
 	return newOp, nil
 }
 
-func performOp(op operation) (string, error) {
-	if op.op == "GET" {
+func performOp(op operation, client string) (string, error) {
+	// Start Transaction, get timestamp
+	timestamp, inTransaction := transactionManager[client]
+	if !inTransaction {
+		timestamp = time.Now().UnixNano()
+		fmt.Printf("Got a request from a non-transactioned client: %d\n", timestamp)
+	} else {
+		fmt.Printf("Got a request from a transactioned client: %d\n", timestamp)
+	}
+
+	// If in a long transaction, scope to that timestamp
+	if op.op == "BEGIN" {
+		transactionManager[client] = timestamp
+		return "started a new transaction\n", nil
+	} else if op.op == "GET" {
 		var sb strings.Builder
 		fmt.Println("About to perform get request")
 		keyVal := tree.Get(op.key)
@@ -106,6 +122,7 @@ func performOp(op operation) (string, error) {
 		return "deleted key in db\n", nil
 	} else if op.op == "QUIT" {
 		fmt.Println("About to quit and close connection")
+		delete(transactionManager, client)
 		return "connection closed\n", nil
 	}
 	return "operation didn't match\n", errors.New("Op didn't match")
