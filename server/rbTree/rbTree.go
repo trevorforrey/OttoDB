@@ -13,6 +13,7 @@ type record struct {
 type recordList struct {
 	key     string
 	records []record
+	expired int64
 }
 
 type nodeColor int
@@ -44,6 +45,9 @@ func (tree *RBTree) Get(key string, timestamp int64) (string, error) {
 	getNode := tree.Search(tree.root, key)
 	if getNode == nil {
 		return "no value found", errors.New("No value found")
+	}
+	if getNode.data.expired != 0 && getNode.data.expired <= timestamp {
+		return "the node has been deleted", nil
 	}
 	recordList := getNode.data.records
 	fmt.Printf("Found key: %s\n", getNode.data.key)
@@ -99,7 +103,8 @@ func (tree *RBTree) Insert(key string, singleRecordList recordList) {
 		newNode.color = Black
 		tree.root = &newNode
 	} else {
-		tree.insertHelper(tree.root, &newNode)
+		insertedNode := tree.insertHelper(tree.root, &newNode)
+		insertedNode.data.expired = 0
 		tree.fixViolation(&newNode)
 	}
 }
@@ -238,6 +243,15 @@ func (tree *RBTree) getMinimum(currNode *node) *node {
 		currNode = currNode.left
 	}
 	return currNode
+}
+
+func (tree *RBTree) Expire(key string, timestamp int64) error {
+	delNode := tree.Search(tree.root, key)
+	if delNode != nil {
+		delNode.data.expired = timestamp
+		return nil
+	}
+	return errors.New("could not expire node that didnt exist")
 }
 
 func (tree *RBTree) Delete(key string) {

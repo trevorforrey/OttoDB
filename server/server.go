@@ -120,7 +120,10 @@ func performOp(op operation, client string) (string, error) {
 	} else if op.op == "DEL" {
 		fmt.Println("About to perform delete request")
 		fmt.Printf("Key: %s\n", op.key)
-		tree.Delete(op.key)
+		err := tree.Expire(op.key, timestamp)
+		if err != nil {
+			return err.Error(), err
+		}
 		tree.InOrderTraversal()
 		return "deleted key in db\n", nil
 	} else if op.op == "QUIT" {
