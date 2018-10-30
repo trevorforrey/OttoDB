@@ -3,16 +3,18 @@ package rbTree
 import (
 	"errors"
 	"fmt"
+	"sync"
 )
 
 type record struct {
 	value     string
-	timestamp int64
+	timestamp uint64
 }
 
 type recordList struct {
 	key     string
 	records []record
+	expired uint64
 }
 
 type nodeColor int
@@ -31,6 +33,7 @@ type node struct {
 }
 
 type RBTree struct {
+	sync.RWMutex
 	root *node
 }
 
@@ -39,20 +42,25 @@ func NewTree() *RBTree {
 	return &tree
 }
 
-func (tree *RBTree) Get(key string, timestamp int64) (string, error) {
+func (tree *RBTree) Get(key string, timestamp uint64, activeTxns map[uint64]bool) (string, error) {
+	tree.RLock()
+	defer tree.RUnlock()
 	fmt.Println("About to start tree search")
 	getNode := tree.Search(tree.root, key)
 	if getNode == nil {
 		return "no value found", errors.New("No value found")
 	}
+	if getNode.data.expired != 0 && getNode.data.expired <= timestamp && !activeTxns[getNode.data.expired] {
+		return "the node has been deleted", nil
+	}
 	recordList := getNode.data.records
 	fmt.Printf("Found key: %s\n", getNode.data.key)
 
-	// Find value scoped in current timestamp
+	// Find value scoped in current timestamp that's committed
 	var returnValue string
 	for i := len(recordList) - 1; i >= 0; i-- {
 		currRecord := recordList[i]
-		if timestamp >= currRecord.timestamp {
+		if timestamp >= currRecord.timestamp && (!activeTxns[currRecord.timestamp] || (activeTxns[currRecord.timestamp] && currRecord.timestamp == timestamp)) {
 			returnValue = currRecord.value
 			break
 		}
@@ -64,17 +72,40 @@ func (tree *RBTree) Get(key string, timestamp int64) (string, error) {
 		return returnValue, nil
 	}
 	return "no value found", errors.New("No value for provided timestamp")
-
 }
 
-func (tree *RBTree) Set(key string, value string, timestamp int64) {
-	var newRecord record
-	newRecord.value = value
-	newRecord.timestamp = timestamp
-	var singleRecordList recordList
-	singleRecordList.key = key
-	singleRecordList.records = []record{newRecord}
-	tree.Insert(key, singleRecordList)
+// TODO If this set becomes more of an update, then it should set the expiration
+// date of the previous value to the current timestamp
+
+// Need to move expiration from the recordList to the individual records (page 240)
+func (tree *RBTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) error {
+	tree.Lock()
+	defer tree.Unlock()
+	var newRecord = record{value: value, timestamp: timestamp}
+	var singleRecordList = recordList{key: key, records: []record{newRecord}}
+
+	// Check to see if another transaction that has completed has written to the node
+	// Setting on current txn is not valid if
+	// 	- an active transaction wrote to the key already - (retry)
+	//	- a txid greater than mine wrote to the key already - (abort)
+	nodeToSet := tree.Search(tree.root, key)
+
+	// If Set is truly just an update
+	if nodeToSet != nil {
+		lastRecord := nodeToSet.data.records[len(nodeToSet.data.records)-1]
+		if lastRecord.timestamp > timestamp {
+			return errors.New("A committed transaction wrote to this key")
+		} else if activeTxns[lastRecord.timestamp] && lastRecord.timestamp != timestamp {
+			return errors.New("An active transaction wrote to this key")
+		}
+		nodeToSet.data.expired = 0
+		nodeToSet.data.records = append(nodeToSet.data.records, newRecord)
+		return nil
+	}
+
+	// If Set needs to insert a new node
+	tree.insert(key, singleRecordList)
+	return nil
 }
 
 func (tree *RBTree) Search(root *node, key string) *node {
@@ -90,7 +121,7 @@ func (tree *RBTree) Search(root *node, key string) *node {
 	}
 }
 
-func (tree *RBTree) Insert(key string, singleRecordList recordList) {
+func (tree *RBTree) insert(key string, singleRecordList recordList) {
 	newNode := node{}
 	newNode.data = singleRecordList
 	newNode.color = Red
@@ -99,27 +130,31 @@ func (tree *RBTree) Insert(key string, singleRecordList recordList) {
 		newNode.color = Black
 		tree.root = &newNode
 	} else {
-		tree.insertHelper(tree.root, &newNode)
+		fmt.Println("calling to insert node")
+		insertedNode := tree.insertHelper(tree.root, &newNode)
+		insertedNode.data.expired = 0
 		tree.fixViolation(&newNode)
 	}
 }
 
 func (tree *RBTree) insertHelper(root *node, newNode *node) *node {
 	if root == nil {
-		fmt.Println("appending new node")
+		fmt.Println("new node inserted")
 		return newNode
 	}
 
 	if newNode.data.key < root.data.key {
-		fmt.Println("new node is less than root key")
+		// fmt.Println("new node is less than root key")
 		root.left = tree.insertHelper(root.left, newNode)
 		root.left.parent = root
 	} else if newNode.data.key > root.data.key {
-		fmt.Println("new node key greater than root key")
+		// fmt.Println("new node key greater than root key")
 		root.right = tree.insertHelper(root.right, newNode)
 		root.right.parent = root
 	} else {
+		// root.data.records[len(root.data.records)-1].expiration = timestamp
 		root.data.records = append(root.data.records, newNode.data.records[0])
+		fmt.Println("new node inserted")
 	}
 
 	return root
@@ -128,45 +163,45 @@ func (tree *RBTree) insertHelper(root *node, newNode *node) *node {
 func (tree *RBTree) fixViolation(newNode *node) {
 	fmt.Println("Starting to fix the violation")
 	for newNode.parent != nil && newNode.parent.color == Red {
-		fmt.Println("In loop")
+		// fmt.Println("In loop")
 		if newNode.parent == newNode.parent.parent.left {
-			fmt.Println("parent is left child")
+			// fmt.Println("parent is left child")
 			uncle := newNode.parent.parent.right
 			if uncle != nil && uncle.color == Red {
-				fmt.Println("uncle is red")
+				// fmt.Println("uncle is red")
 				newNode.parent.color = Black
 				uncle.color = Black
 				newNode.parent.parent.color = Red
 				newNode = newNode.parent.parent
 			} else {
-				fmt.Println("uncle is black")
+				// fmt.Println("uncle is black")
 				if newNode == newNode.parent.right {
-					fmt.Println("new node is a left child")
+					// fmt.Println("new node is a left child")
 					newNode = newNode.parent
 					tree.leftRotate(newNode)
 				}
-				fmt.Println("new node is a right child")
+				// fmt.Println("new node is a right child")
 				newNode.parent.color = Black
 				newNode.parent.parent.color = Red
 				tree.rightRotate(newNode.parent.parent)
 			}
 		} else {
-			fmt.Println("parent is right child")
+			// fmt.Println("parent is right child")
 			uncle := newNode.parent.parent.left
 			if uncle != nil && uncle.color == Red {
-				fmt.Println("uncle is red")
+				// fmt.Println("uncle is red")
 				newNode.parent.color = Black
 				uncle.color = Black
 				newNode.parent.parent.color = Red
 				newNode = newNode.parent.parent
 			} else {
-				fmt.Println("uncle is black")
+				// fmt.Println("uncle is black")
 				if newNode == newNode.parent.left {
-					fmt.Println("new node is a left child")
+					// fmt.Println("new node is a left child")
 					newNode = newNode.parent
 					tree.rightRotate(newNode)
 				}
-				fmt.Println("new node is a right child")
+				// fmt.Println("new node is a right child")
 				newNode.parent.color = Black
 				newNode.parent.parent.color = Red
 				tree.leftRotate(newNode.parent.parent)
@@ -174,6 +209,7 @@ func (tree *RBTree) fixViolation(newNode *node) {
 		}
 	}
 	tree.root.color = Black
+	fmt.Println("Violation fixed")
 }
 
 func (tree *RBTree) leftRotate(rotatingNode *node) {
@@ -240,7 +276,20 @@ func (tree *RBTree) getMinimum(currNode *node) *node {
 	return currNode
 }
 
+func (tree *RBTree) Expire(key string, timestamp uint64, activeTxns map[uint64]bool) error {
+	tree.Lock()
+	defer tree.Unlock()
+	delNode := tree.Search(tree.root, key)
+	if delNode != nil {
+		delNode.data.expired = timestamp
+		return nil
+	}
+	return errors.New("could not expire node that didnt exist")
+}
+
 func (tree *RBTree) Delete(key string) {
+	tree.Lock()
+	defer tree.Unlock()
 	delNode := tree.Search(tree.root, key)
 	tree.deleteNode(delNode)
 }
@@ -333,6 +382,8 @@ func (tree *RBTree) deleteFixUp(fixNode *node) {
 }
 
 func (tree *RBTree) BreadthFirstTraversal() {
+	tree.RLock()
+	defer tree.RUnlock()
 	if tree.root == nil {
 		return
 	}
@@ -359,6 +410,8 @@ func (tree *RBTree) BreadthFirstTraversal() {
 }
 
 func (tree *RBTree) InOrderTraversal() {
+	tree.RLock()
+	defer tree.RUnlock()
 	tree.inOrderTraversal(tree.root)
 }
 
@@ -376,4 +429,54 @@ func (tree *RBTree) inOrderTraversal(currNode *node) {
 	}
 
 	tree.inOrderTraversal(currNode.right)
+}
+
+// Returns true if tree is sorted properly
+func (tree *RBTree) Sorted() bool {
+	tree.RLock()
+	defer tree.RUnlock()
+	type boundedNode struct {
+		node       node
+		lowerBound string
+		upperBound string
+	}
+	startingNode := boundedNode{}
+	startingNode.node = *(tree.root)
+	nodes := make([]boundedNode, 1)
+	nodes = append(nodes, startingNode)
+	for len(nodes) != 0 {
+		var nodeAndBound boundedNode
+		// Pop from nodes stack
+		nodeAndBound, nodes = nodes[0], nodes[1:]
+		currNode := nodeAndBound.node
+		currNodeKey := currNode.data.key
+		lowerBound := nodeAndBound.lowerBound
+		upperBound := nodeAndBound.upperBound
+
+		// Check to see if key is in the proper upper / lower bound
+		if (currNodeKey <= lowerBound || currNodeKey >= upperBound) && (currNode.data.key != "" && upperBound != "" && lowerBound != "") {
+			fmt.Printf("Key is %s. Lower bound is %s. Upper Bound is %s\n", currNodeKey, lowerBound, upperBound)
+			return false
+		} else {
+			fmt.Printf("Lower : (Key) : Upper - %s : (%s) : %s\n", lowerBound, currNodeKey, upperBound)
+		}
+
+		// push any left / right children of current node
+		if currNode.left != nil {
+			var leftNodeAndBound boundedNode
+			leftNodeAndBound.node = *(currNode.left)
+			leftNodeAndBound.lowerBound = lowerBound
+			leftNodeAndBound.upperBound = currNodeKey
+			nodes = append(nodes, leftNodeAndBound)
+		}
+		if currNode.right != nil {
+			var rightNodeAndBound boundedNode
+			rightNodeAndBound.node = *(currNode.right)
+			rightNodeAndBound.lowerBound = currNodeKey
+			rightNodeAndBound.upperBound = upperBound
+			nodes = append(nodes, rightNodeAndBound)
+		}
+
+	}
+	return true
 }
