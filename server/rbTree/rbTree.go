@@ -407,3 +407,53 @@ func (tree *RBTree) inOrderTraversal(currNode *node) {
 
 	tree.inOrderTraversal(currNode.right)
 }
+
+// Returns true if tree is sorted properly
+func (tree *RBTree) Sorted() bool {
+	tree.RLock()
+	defer tree.RUnlock()
+	type boundedNode struct {
+		node       node
+		lowerBound string
+		upperBound string
+	}
+	startingNode := boundedNode{}
+	startingNode.node = *(tree.root)
+	nodes := make([]boundedNode, 1)
+	nodes = append(nodes, startingNode)
+	for len(nodes) != 0 {
+		var nodeAndBound boundedNode
+		// Pop from nodes stack
+		nodeAndBound, nodes = nodes[0], nodes[1:]
+		currNode := nodeAndBound.node
+		currNodeKey := currNode.data.key
+		lowerBound := nodeAndBound.lowerBound
+		upperBound := nodeAndBound.upperBound
+
+		// Check to see if key is in the proper upper / lower bound
+		if (currNodeKey <= lowerBound || currNodeKey >= upperBound) && (currNode.data.key != "" && upperBound != "" && lowerBound != "") {
+			fmt.Printf("Key is %s. Lower bound is %s. Upper Bound is %s\n", currNodeKey, lowerBound, upperBound)
+			return false
+		} else {
+			fmt.Printf("Lower : (Key) : Upper - %s : (%s) : %s\n", lowerBound, currNodeKey, upperBound)
+		}
+
+		// push any left / right children of current node
+		if currNode.left != nil {
+			var leftNodeAndBound boundedNode
+			leftNodeAndBound.node = *(currNode.left)
+			leftNodeAndBound.lowerBound = lowerBound
+			leftNodeAndBound.upperBound = currNodeKey
+			nodes = append(nodes, leftNodeAndBound)
+		}
+		if currNode.right != nil {
+			var rightNodeAndBound boundedNode
+			rightNodeAndBound.node = *(currNode.right)
+			rightNodeAndBound.lowerBound = currNodeKey
+			rightNodeAndBound.upperBound = upperBound
+			nodes = append(nodes, rightNodeAndBound)
+		}
+
+	}
+	return true
+}
