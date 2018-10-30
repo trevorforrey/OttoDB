@@ -42,7 +42,7 @@ func NewTree() *RBTree {
 	return &tree
 }
 
-func (tree *RBTree) Get(key string, timestamp uint64) (string, error) {
+func (tree *RBTree) Get(key string, timestamp uint64, activeTxns map[uint64]bool) (string, error) {
 	tree.RLock()
 	defer tree.RUnlock()
 	fmt.Println("About to start tree search")
@@ -50,17 +50,17 @@ func (tree *RBTree) Get(key string, timestamp uint64) (string, error) {
 	if getNode == nil {
 		return "no value found", errors.New("No value found")
 	}
-	if getNode.data.expired != 0 && getNode.data.expired <= timestamp {
+	if getNode.data.expired != 0 && getNode.data.expired <= timestamp && !activeTxns[getNode.data.expired] {
 		return "the node has been deleted", nil
 	}
 	recordList := getNode.data.records
 	fmt.Printf("Found key: %s\n", getNode.data.key)
 
-	// Find value scoped in current timestamp
+	// Find value scoped in current timestamp that's committed
 	var returnValue string
 	for i := len(recordList) - 1; i >= 0; i-- {
 		currRecord := recordList[i]
-		if timestamp >= currRecord.timestamp {
+		if timestamp >= currRecord.timestamp && (!activeTxns[currRecord.timestamp] || (activeTxns[currRecord.timestamp] && currRecord.timestamp == timestamp)) {
 			returnValue = currRecord.value
 			break
 		}
@@ -78,7 +78,7 @@ func (tree *RBTree) Get(key string, timestamp uint64) (string, error) {
 // date of the previous value to the current timestamp
 
 // Need to move expiration from the recordList to the individual records (page 240)
-func (tree *RBTree) Set(key string, value string, timestamp uint64) {
+func (tree *RBTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) {
 	tree.Lock()
 	defer tree.Unlock()
 	var newRecord record
@@ -258,7 +258,7 @@ func (tree *RBTree) getMinimum(currNode *node) *node {
 	return currNode
 }
 
-func (tree *RBTree) Expire(key string, timestamp uint64) error {
+func (tree *RBTree) Expire(key string, timestamp uint64, activeTxns map[uint64]bool) error {
 	tree.Lock()
 	defer tree.Unlock()
 	delNode := tree.Search(tree.root, key)
