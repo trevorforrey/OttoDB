@@ -3,6 +3,7 @@ package rbTree
 import (
 	"errors"
 	"fmt"
+	"sync"
 )
 
 type record struct {
@@ -32,6 +33,7 @@ type node struct {
 }
 
 type RBTree struct {
+	sync.RWMutex
 	root *node
 }
 
@@ -41,6 +43,8 @@ func NewTree() *RBTree {
 }
 
 func (tree *RBTree) Get(key string, timestamp int64) (string, error) {
+	tree.RLock()
+	defer tree.RUnlock()
 	fmt.Println("About to start tree search")
 	getNode := tree.Search(tree.root, key)
 	if getNode == nil {
@@ -68,17 +72,18 @@ func (tree *RBTree) Get(key string, timestamp int64) (string, error) {
 		return returnValue, nil
 	}
 	return "no value found", errors.New("No value for provided timestamp")
-
 }
 
 func (tree *RBTree) Set(key string, value string, timestamp int64) {
+	tree.Lock()
+	defer tree.Unlock()
 	var newRecord record
 	newRecord.value = value
 	newRecord.timestamp = timestamp
 	var singleRecordList recordList
 	singleRecordList.key = key
 	singleRecordList.records = []record{newRecord}
-	tree.Insert(key, singleRecordList)
+	tree.insert(key, singleRecordList)
 }
 
 func (tree *RBTree) Search(root *node, key string) *node {
@@ -94,7 +99,7 @@ func (tree *RBTree) Search(root *node, key string) *node {
 	}
 }
 
-func (tree *RBTree) Insert(key string, singleRecordList recordList) {
+func (tree *RBTree) insert(key string, singleRecordList recordList) {
 	newNode := node{}
 	newNode.data = singleRecordList
 	newNode.color = Red
@@ -103,6 +108,7 @@ func (tree *RBTree) Insert(key string, singleRecordList recordList) {
 		newNode.color = Black
 		tree.root = &newNode
 	} else {
+		fmt.Println("calling to insert node")
 		insertedNode := tree.insertHelper(tree.root, &newNode)
 		insertedNode.data.expired = 0
 		tree.fixViolation(&newNode)
@@ -111,20 +117,21 @@ func (tree *RBTree) Insert(key string, singleRecordList recordList) {
 
 func (tree *RBTree) insertHelper(root *node, newNode *node) *node {
 	if root == nil {
-		fmt.Println("appending new node")
+		fmt.Println("new node inserted")
 		return newNode
 	}
 
 	if newNode.data.key < root.data.key {
-		fmt.Println("new node is less than root key")
+		// fmt.Println("new node is less than root key")
 		root.left = tree.insertHelper(root.left, newNode)
 		root.left.parent = root
 	} else if newNode.data.key > root.data.key {
-		fmt.Println("new node key greater than root key")
+		// fmt.Println("new node key greater than root key")
 		root.right = tree.insertHelper(root.right, newNode)
 		root.right.parent = root
 	} else {
 		root.data.records = append(root.data.records, newNode.data.records[0])
+		fmt.Println("new node inserted")
 	}
 
 	return root
@@ -133,45 +140,45 @@ func (tree *RBTree) insertHelper(root *node, newNode *node) *node {
 func (tree *RBTree) fixViolation(newNode *node) {
 	fmt.Println("Starting to fix the violation")
 	for newNode.parent != nil && newNode.parent.color == Red {
-		fmt.Println("In loop")
+		// fmt.Println("In loop")
 		if newNode.parent == newNode.parent.parent.left {
-			fmt.Println("parent is left child")
+			// fmt.Println("parent is left child")
 			uncle := newNode.parent.parent.right
 			if uncle != nil && uncle.color == Red {
-				fmt.Println("uncle is red")
+				// fmt.Println("uncle is red")
 				newNode.parent.color = Black
 				uncle.color = Black
 				newNode.parent.parent.color = Red
 				newNode = newNode.parent.parent
 			} else {
-				fmt.Println("uncle is black")
+				// fmt.Println("uncle is black")
 				if newNode == newNode.parent.right {
-					fmt.Println("new node is a left child")
+					// fmt.Println("new node is a left child")
 					newNode = newNode.parent
 					tree.leftRotate(newNode)
 				}
-				fmt.Println("new node is a right child")
+				// fmt.Println("new node is a right child")
 				newNode.parent.color = Black
 				newNode.parent.parent.color = Red
 				tree.rightRotate(newNode.parent.parent)
 			}
 		} else {
-			fmt.Println("parent is right child")
+			// fmt.Println("parent is right child")
 			uncle := newNode.parent.parent.left
 			if uncle != nil && uncle.color == Red {
-				fmt.Println("uncle is red")
+				// fmt.Println("uncle is red")
 				newNode.parent.color = Black
 				uncle.color = Black
 				newNode.parent.parent.color = Red
 				newNode = newNode.parent.parent
 			} else {
-				fmt.Println("uncle is black")
+				// fmt.Println("uncle is black")
 				if newNode == newNode.parent.left {
-					fmt.Println("new node is a left child")
+					// fmt.Println("new node is a left child")
 					newNode = newNode.parent
 					tree.rightRotate(newNode)
 				}
-				fmt.Println("new node is a right child")
+				// fmt.Println("new node is a right child")
 				newNode.parent.color = Black
 				newNode.parent.parent.color = Red
 				tree.leftRotate(newNode.parent.parent)
@@ -179,6 +186,7 @@ func (tree *RBTree) fixViolation(newNode *node) {
 		}
 	}
 	tree.root.color = Black
+	fmt.Println("Violation fixed")
 }
 
 func (tree *RBTree) leftRotate(rotatingNode *node) {
@@ -246,6 +254,8 @@ func (tree *RBTree) getMinimum(currNode *node) *node {
 }
 
 func (tree *RBTree) Expire(key string, timestamp int64) error {
+	tree.Lock()
+	defer tree.Unlock()
 	delNode := tree.Search(tree.root, key)
 	if delNode != nil {
 		delNode.data.expired = timestamp
@@ -255,6 +265,8 @@ func (tree *RBTree) Expire(key string, timestamp int64) error {
 }
 
 func (tree *RBTree) Delete(key string) {
+	tree.Lock()
+	defer tree.Unlock()
 	delNode := tree.Search(tree.root, key)
 	tree.deleteNode(delNode)
 }
@@ -347,6 +359,8 @@ func (tree *RBTree) deleteFixUp(fixNode *node) {
 }
 
 func (tree *RBTree) BreadthFirstTraversal() {
+	tree.RLock()
+	defer tree.RUnlock()
 	if tree.root == nil {
 		return
 	}
@@ -373,6 +387,8 @@ func (tree *RBTree) BreadthFirstTraversal() {
 }
 
 func (tree *RBTree) InOrderTraversal() {
+	tree.RLock()
+	defer tree.RUnlock()
 	tree.inOrderTraversal(tree.root)
 }
 
