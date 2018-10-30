@@ -54,6 +54,8 @@ func handleConnection(conn net.Conn) {
 		response, err := performOp(operation, conn.RemoteAddr().String())
 		if err != nil {
 			fmt.Printf("Error performing operation %s\n", err)
+			fmt.Fprintf(conn, "error: %s\n", err)
+			continue
 		}
 		if response == "connection closed\n" {
 			fmt.Printf("About to send response: %s\n", response)
@@ -137,9 +139,12 @@ func performOp(op operation, client string) (string, error) {
 		fmt.Println("About to perform set request")
 		fmt.Printf("Key: %s\n", op.key)
 		fmt.Printf("Value: %s\n", op.value)
-		tree.Set(op.key, op.value, txID, activeTxdSnapshot)
+		err := tree.Set(op.key, op.value, txID, activeTxdSnapshot)
 		if singleRunTxn {
 			delete(activeTransactions.ActiveTransactions, txID)
+		}
+		if err != nil {
+			return err.Error(), err
 		}
 		tree.InOrderTraversal()
 		return "set value in db\n", nil

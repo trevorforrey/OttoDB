@@ -78,16 +78,34 @@ func (tree *RBTree) Get(key string, timestamp uint64, activeTxns map[uint64]bool
 // date of the previous value to the current timestamp
 
 // Need to move expiration from the recordList to the individual records (page 240)
-func (tree *RBTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) {
+func (tree *RBTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) error {
 	tree.Lock()
 	defer tree.Unlock()
-	var newRecord record
-	newRecord.value = value
-	newRecord.timestamp = timestamp
-	var singleRecordList recordList
-	singleRecordList.key = key
-	singleRecordList.records = []record{newRecord}
+	var newRecord = record{value: value, timestamp: timestamp}
+	var singleRecordList = recordList{key: key, records: []record{newRecord}}
+
+	// Check to see if another transaction that has completed has written to the node
+	// Setting on current txn is not valid if
+	// 	- an active transaction wrote to the key already - (retry)
+	//	- a txid greater than mine wrote to the key already - (abort)
+	nodeToSet := tree.Search(tree.root, key)
+
+	// If Set is truly just an update
+	if nodeToSet != nil {
+		lastRecord := nodeToSet.data.records[len(nodeToSet.data.records)-1]
+		if lastRecord.timestamp > timestamp {
+			return errors.New("A committed transaction wrote to this key")
+		} else if activeTxns[lastRecord.timestamp] && lastRecord.timestamp != timestamp {
+			return errors.New("An active transaction wrote to this key")
+		}
+		nodeToSet.data.expired = 0
+		nodeToSet.data.records = append(nodeToSet.data.records, newRecord)
+		return nil
+	}
+
+	// If Set needs to insert a new node
 	tree.insert(key, singleRecordList)
+	return nil
 }
 
 func (tree *RBTree) Search(root *node, key string) *node {
