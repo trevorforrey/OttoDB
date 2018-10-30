@@ -8,13 +8,13 @@ import (
 
 type record struct {
 	value     string
-	timestamp int64
+	timestamp uint64
 }
 
 type recordList struct {
 	key     string
 	records []record
-	expired int64
+	expired uint64
 }
 
 type nodeColor int
@@ -42,7 +42,7 @@ func NewTree() *RBTree {
 	return &tree
 }
 
-func (tree *RBTree) Get(key string, timestamp int64) (string, error) {
+func (tree *RBTree) Get(key string, timestamp uint64) (string, error) {
 	tree.RLock()
 	defer tree.RUnlock()
 	fmt.Println("About to start tree search")
@@ -74,7 +74,11 @@ func (tree *RBTree) Get(key string, timestamp int64) (string, error) {
 	return "no value found", errors.New("No value for provided timestamp")
 }
 
-func (tree *RBTree) Set(key string, value string, timestamp int64) {
+// TODO If this set becomes more of an update, then it should set the expiration
+// date of the previous value to the current timestamp
+
+// Need to move expiration from the recordList to the individual records (page 240)
+func (tree *RBTree) Set(key string, value string, timestamp uint64) {
 	tree.Lock()
 	defer tree.Unlock()
 	var newRecord record
@@ -130,6 +134,7 @@ func (tree *RBTree) insertHelper(root *node, newNode *node) *node {
 		root.right = tree.insertHelper(root.right, newNode)
 		root.right.parent = root
 	} else {
+		// root.data.records[len(root.data.records)-1].expiration = timestamp
 		root.data.records = append(root.data.records, newNode.data.records[0])
 		fmt.Println("new node inserted")
 	}
@@ -253,7 +258,7 @@ func (tree *RBTree) getMinimum(currNode *node) *node {
 	return currNode
 }
 
-func (tree *RBTree) Expire(key string, timestamp int64) error {
+func (tree *RBTree) Expire(key string, timestamp uint64) error {
 	tree.Lock()
 	defer tree.Unlock()
 	delNode := tree.Search(tree.root, key)

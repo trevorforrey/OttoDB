@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"time"
+	"sync/atomic"
 )
 
 type operation struct {
@@ -19,7 +19,8 @@ type operation struct {
 var (
 	tree               = rbTree.NewTree()
 	validOps           = map[string]struct{}{"GET": {}, "SET": {}, "DEL": {}, "QUIT": {}, "BEGIN": {}, "COMMIT": {}}
-	transactionManager = make(map[string]int64)
+	transactionID      uint64
+	transactionManager = make(map[string]uint64)
 )
 
 func main() {
@@ -87,22 +88,23 @@ func parseOp(fullOp string) (operation, error) {
 
 func performOp(op operation, client string) (string, error) {
 	// Start Transaction, get timestamp
-	timestamp, inTransaction := transactionManager[client]
+	txID, inTransaction := transactionManager[client]
 	if !inTransaction {
-		timestamp = time.Now().UnixNano()
-		fmt.Printf("Got a request from a non-transactioned client: %d\n", timestamp)
+		atomic.AddUint64(&transactionID, 1)
+		txID = transactionID
+		fmt.Printf("Got a request from a non-transactioned client: %d\n", txID)
 	} else {
-		fmt.Printf("Got a request from a transactioned client: %d\n", timestamp)
+		fmt.Printf("Got a request from a transactioned client: %d\n", txID)
 	}
 
 	// If in a long transaction, scope to that timestamp
 	if op.op == "BEGIN" {
-		transactionManager[client] = timestamp
+		transactionManager[client] = txID
 		return "started a new transaction\n", nil
 	} else if op.op == "GET" {
 		var sb strings.Builder
 		fmt.Println("About to perform get request")
-		keyVal, err := tree.Get(op.key, timestamp)
+		keyVal, err := tree.Get(op.key, txID)
 		if err != nil {
 			return err.Error(), err
 		}
@@ -114,13 +116,13 @@ func performOp(op operation, client string) (string, error) {
 		fmt.Println("About to perform set request")
 		fmt.Printf("Key: %s\n", op.key)
 		fmt.Printf("Value: %s\n", op.value)
-		tree.Set(op.key, op.value, timestamp)
+		tree.Set(op.key, op.value, txID)
 		tree.InOrderTraversal()
 		return "set value in db\n", nil
 	} else if op.op == "DEL" {
 		fmt.Println("About to perform delete request")
 		fmt.Printf("Key: %s\n", op.key)
-		err := tree.Expire(op.key, timestamp)
+		err := tree.Expire(op.key, txID)
 		if err != nil {
 			return err.Error(), err
 		}
