@@ -3,12 +3,13 @@ package main
 import (
 	"OttoDB/server/rbTree"
 	"OttoDB/server/transactionManagers"
-	"bufio"
 	"errors"
 	"fmt"
-	"net"
+	"log"
 	"strings"
 	"sync/atomic"
+
+	"github.com/tidwall/redcon"
 )
 
 type operation struct {
@@ -26,68 +27,61 @@ var (
 )
 
 func main() {
-	ln, err := net.Listen("tcp", ":8080")
+
+	addr := ":8080"
+
+	err := redcon.ListenAndServe(addr,
+		func(conn redcon.Conn, cmd redcon.Command) {
+			switch strings.ToLower(string(cmd.Args[0])) {
+			default:
+				conn.WriteError("ERR unknown command '" + string(cmd.Args[0]) + "'")
+			case "ping":
+				conn.WriteString("PONG")
+			case "quit":
+				conn.WriteString("OK")
+				conn.Close()
+			case "set":
+				if len(cmd.Args) != 3 {
+					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
+					return
+				}
+				conn.WriteString("OK")
+			case "get":
+				if len(cmd.Args) != 2 {
+					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
+					return
+				}
+				conn.WriteString("OK")
+				// if !ok {
+				// 	conn.WriteNull()
+				// } else {
+				// 	conn.WriteBulk(val)
+				// }
+			case "del":
+				if len(cmd.Args) != 2 {
+					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
+					return
+				}
+				conn.WriteString("OK")
+			case "begin":
+				conn.WriteString("OK")
+			case "commit":
+				conn.WriteString("OK")
+			}
+		},
+		func(conn redcon.Conn) bool {
+			// use this function to accept or deny the connection.
+			log.Printf("accept: %s", conn.RemoteAddr())
+			return true
+		},
+		func(conn redcon.Conn, err error) {
+			// this is called when the connection has been closed
+			log.Printf("closed: %s, err: %v", conn.RemoteAddr(), err)
+		},
+	)
 	if err != nil {
-		fmt.Printf("Error while getting connection %g", err)
+		log.Fatal(err)
 	}
-	defer ln.Close()
-	for {
-		conn, err := ln.Accept()
-		fmt.Println("Recieved a request")
-		fmt.Printf("From Remote: %v\n", conn.RemoteAddr())
-		if err != nil {
-			fmt.Printf("Error while accepting connection %s", err)
-		}
-		go handleConnection(conn)
-	}
-}
-
-func handleConnection(conn net.Conn) {
-	fmt.Println("About to handle connection")
-	defer conn.Close()
-	for {
-		fullOp, err := bufio.NewReader(conn).ReadString('\n')
-		operation, err := parseOp(fullOp)
-		if err != nil {
-			fmt.Printf("Error reading message from client: %s\n", err)
-		}
-		response, err := performOp(operation, conn.RemoteAddr().String())
-		if err != nil {
-			fmt.Printf("Error performing operation %s\n", err)
-			fmt.Fprintf(conn, "error: %s\n", err)
-			continue
-		}
-		if response == "connection closed\n" {
-			fmt.Printf("About to send response: %s\n", response)
-			fmt.Fprint(conn, response)
-			conn.Close()
-			break
-		} else {
-			fmt.Printf("About to send response: %s\n", response)
-			fmt.Fprint(conn, response)
-		}
-	}
-	fmt.Println("closed connection with client")
-}
-
-func parseOp(fullOp string) (operation, error) {
-	splitOps := strings.Fields(fullOp)
-	var newOp operation
-	newOp.op = splitOps[0]
-	if newOp.op == "GET" || newOp.op == "SET" || newOp.op == "DEL" {
-		newOp.key = splitOps[1]
-	}
-	if newOp.op == "SET" {
-		newOp.value = splitOps[2]
-	}
-	fmt.Printf("Received %s operation\n", newOp.op)
-
-	// Check that new op is a valid op, if not, return error
-	_, valid := validOps[newOp.op]
-	if !valid {
-		return newOp, errors.New("Invalid operation requested: ")
-	}
-	return newOp, nil
 }
 
 func performOp(op operation, client string) (string, error) {
