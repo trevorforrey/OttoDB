@@ -45,7 +45,7 @@ func NewTree() *RBTree {
 func (tree *RBTree) Get(key string, timestamp uint64, activeTxns map[uint64]bool) (string, error) {
 	tree.RLock()
 	defer tree.RUnlock()
-	fmt.Println("About to start tree search")
+	fmt.Printf("About to start tree search on %s\n", key)
 	getNode := tree.Search(tree.root, key)
 	if getNode == nil {
 		return "no value found", errors.New("No value found")
