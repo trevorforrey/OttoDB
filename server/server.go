@@ -1,8 +1,8 @@
 package main
 
 import (
-	"OttoDB/server/rbTree"
 	"OttoDB/server/transactionManagers"
+	"OttoDB/store/rbTree"
 	"fmt"
 	"log"
 	"strings"
@@ -15,6 +15,12 @@ type operation struct {
 	op    string
 	key   string
 	value string
+}
+
+type store interface {
+	Get() string
+	Set() string
+	Del() string
 }
 
 var (
@@ -58,13 +64,16 @@ func main() {
 			switch strings.ToLower(string(cmd.Args[0])) {
 			default:
 				conn.WriteError("ERR unknown command '" + string(cmd.Args[0]) + "'")
+
 			case "ping":
 				conn.WriteString("PONG")
+
 			case "quit":
 				delete(activeTransactions.ActiveTransactions, txID)
 				delete(transactionManager.Transactions, client)
 				conn.WriteString("OK")
 				conn.Close()
+
 			case "set":
 				if len(cmd.Args) != 3 {
 					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
@@ -78,6 +87,7 @@ func main() {
 					conn.WriteNull()
 				}
 				conn.WriteString("OK")
+
 			case "get":
 				if len(cmd.Args) != 2 {
 					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
@@ -93,6 +103,7 @@ func main() {
 				} else {
 					conn.WriteString(keyVal)
 				}
+
 			case "del":
 				if len(cmd.Args) != 2 {
 					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
@@ -107,13 +118,13 @@ func main() {
 				} else {
 					conn.WriteString("OK")
 				}
-			case "begin":
 
+			case "begin":
 				transactionManager.Lock()
 				transactionManager.Transactions[client] = txID
 				transactionManager.Unlock()
-
 				conn.WriteString("OK")
+
 			case "commit":
 				conn.WriteString("OK")
 			}
