@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync/atomic"
 
 	"github.com/tidwall/redcon"
 )
@@ -36,29 +37,29 @@ func main() {
 	err := redcon.ListenAndServe(addr,
 		func(conn redcon.Conn, cmd redcon.Command) {
 
-			// client := conn.NetConn().RemoteAddr().String()
+			client := conn.NetConn().RemoteAddr().String()
 
-			// // Start Transaction, get txID
-			// transactionManager.RLock()
-			// txID, inTransaction := transactionManager.Transactions[client]
-			// transactionManager.RUnlock()
+			// Start Transaction, get txID
+			transactionManager.RLock()
+			txID, inTransaction := transactionManager.Transactions[client]
+			transactionManager.RUnlock()
 
-			// singleRunTxn := true
-			// if !inTransaction {
-			// 	atomic.AddUint64(&transactionID, 1)
-			// 	txID = transactionID
-			// 	fmt.Printf("Got a request from a non-transactioned client: %d\n", txID)
-			// } else {
-			// 	singleRunTxn = false
-			// 	fmt.Printf("Got a request from a transactioned client: %d\n", txID)
-			// }
-			// activeTransactions.Lock()
-			// activeTransactions.ActiveTransactions[txID] = true
-			// activeTransactions.Unlock()
+			singleRunTxn := true
+			if !inTransaction {
+				atomic.AddUint64(&transactionID, 1)
+				txID = transactionID
+				fmt.Printf("Got a request from a non-transactioned client: %d\n", txID)
+			} else {
+				singleRunTxn = false
+				fmt.Printf("Got a request from a transactioned client: %d\n", txID)
+			}
+			activeTransactions.Lock()
+			activeTransactions.ActiveTransactions[txID] = true
+			activeTransactions.Unlock()
 
-			// activeTransactions.RLock()
-			// activeTxdSnapshot := shapshotActiveTransactions(activeTransactions.ActiveTransactions)
-			// activeTransactions.RUnlock()
+			activeTransactions.RLock()
+			activeTxdSnapshot := shapshotActiveTransactions(activeTransactions.ActiveTransactions)
+			activeTransactions.RUnlock()
 
 			switch strings.ToLower(string(cmd.Args[0])) {
 			default:
@@ -68,8 +69,8 @@ func main() {
 				conn.WriteString("PONG")
 
 			case "quit":
-				// delete(activeTransactions.ActiveTransactions, txID)
-				// delete(transactionManager.Transactions, client)
+				delete(activeTransactions.ActiveTransactions, txID)
+				delete(transactionManager.Transactions, client)
 				conn.WriteString("OK")
 				conn.Close()
 
@@ -78,10 +79,10 @@ func main() {
 					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 					return
 				}
-				err := tree.Set(string(cmd.Args[1]), string(cmd.Args[2]))
-				// if singleRunTxn {
-				// 	delete(activeTransactions.ActiveTransactions, txID)
-				// }
+				err := tree.Set(string(cmd.Args[1]), string(cmd.Args[2]), txID, activeTxdSnapshot)
+				if singleRunTxn {
+					delete(activeTransactions.ActiveTransactions, txID)
+				}
 				if err != nil {
 					conn.WriteNull()
 				}
@@ -92,10 +93,10 @@ func main() {
 					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 					return
 				}
-				keyVal, err := tree.Get(string(cmd.Args[1]))
-				// if singleRunTxn {
-				// 	delete(activeTransactions.ActiveTransactions, txID)
-				// }
+				keyVal, err := tree.Get(string(cmd.Args[1]), txID, activeTxdSnapshot)
+				if singleRunTxn {
+					delete(activeTransactions.ActiveTransactions, txID)
+				}
 				if err != nil {
 					fmt.Print(err)
 					conn.WriteNull()
@@ -108,10 +109,10 @@ func main() {
 					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 					return
 				}
-				err := tree.Delete(string(cmd.Args[1]))
-				// if singleRunTxn {
-				// 	delete(activeTransactions.ActiveTransactions, txID)
-				// }
+				err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
+				if singleRunTxn {
+					delete(activeTransactions.ActiveTransactions, txID)
+				}
 				if err != nil {
 					conn.WriteNull()
 				} else {
@@ -119,13 +120,19 @@ func main() {
 				}
 
 			case "begin":
-				// transactionManager.Lock()
-				// transactionManager.Transactions[client] = txID
-				// transactionManager.Unlock()
+				transactionManager.Lock()
+				transactionManager.Transactions[client] = txID
+				transactionManager.Unlock()
 				conn.WriteString("OK")
 
 			case "commit":
+				delete(activeTransactions.ActiveTransactions, txID)
+				delete(transactionManager.Transactions, client)
 				conn.WriteString("OK")
+
+			case "print":
+				nodeTimeStamps := tree.RecordListPrint(string(cmd.Args[1]))
+				conn.WriteString(nodeTimeStamps)
 			}
 		},
 		func(conn redcon.Conn) bool {
