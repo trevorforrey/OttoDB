@@ -2,7 +2,7 @@ package main
 
 import (
 	"OttoDB/server/transactionManagers"
-	"OttoDB/store/rbTree"
+	"OttoDB/store/binTree"
 	"fmt"
 	"log"
 	"strings"
@@ -24,7 +24,7 @@ type store interface {
 }
 
 var (
-	tree               = rbTree.NewTree()
+	tree               = binTree.NewTree()
 	transactionID      uint64
 	transactionManager = transactionManagers.NewClientMap()
 	activeTransactions = transactionManagers.NewActiveTxnMap()
@@ -126,7 +126,13 @@ func main() {
 				conn.WriteString("OK")
 
 			case "commit":
+				delete(activeTransactions.ActiveTransactions, txID)
+				delete(transactionManager.Transactions, client)
 				conn.WriteString("OK")
+
+			case "print":
+				nodeTimeStamps := tree.RecordListPrint(string(cmd.Args[1]))
+				conn.WriteString(nodeTimeStamps)
 			}
 		},
 		func(conn redcon.Conn) bool {
