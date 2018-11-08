@@ -5,6 +5,7 @@ import (
 	"OttoDB/store/binTree"
 	"fmt"
 	"log"
+	"runtime"
 	"strings"
 	"sync/atomic"
 
@@ -31,7 +32,7 @@ var (
 )
 
 func main() {
-
+	runtime.GOMAXPROCS(runtime.NumCPU())
 	addr := ":8080"
 
 	err := redcon.ListenAndServe(addr,
@@ -46,8 +47,7 @@ func main() {
 
 			singleRunTxn := true
 			if !inTransaction {
-				atomic.AddUint64(&transactionID, 1)
-				txID = transactionID
+				txID := atomic.AddUint64(&transactionID, 1)
 				fmt.Printf("Got a request from a non-transactioned client: %d\n", txID)
 			} else {
 				singleRunTxn = false
@@ -69,8 +69,14 @@ func main() {
 				conn.WriteString("PONG")
 
 			case "quit":
+				activeTransactions.Lock()
+				defer activeTransactions.Unlock()
 				delete(activeTransactions.ActiveTransactions, txID)
+
+				transactionManager.Lock()
+				defer transactionManager.Unlock()
 				delete(transactionManager.Transactions, client)
+
 				conn.WriteString("OK")
 				conn.Close()
 
@@ -95,6 +101,8 @@ func main() {
 				}
 				keyVal, err := tree.Get(string(cmd.Args[1]), txID, activeTxdSnapshot)
 				if singleRunTxn {
+					activeTransactions.Lock()
+					defer activeTransactions.Unlock()
 					delete(activeTransactions.ActiveTransactions, txID)
 				}
 				if err != nil {
@@ -111,6 +119,8 @@ func main() {
 				}
 				err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
 				if singleRunTxn {
+					activeTransactions.Lock()
+					defer activeTransactions.Unlock()
 					delete(activeTransactions.ActiveTransactions, txID)
 				}
 				if err != nil {
@@ -126,7 +136,12 @@ func main() {
 				conn.WriteString("OK")
 
 			case "commit":
+				activeTransactions.Lock()
+				defer activeTransactions.Unlock()
 				delete(activeTransactions.ActiveTransactions, txID)
+
+				transactionManager.Lock()
+				defer transactionManager.Unlock()
 				delete(transactionManager.Transactions, client)
 				conn.WriteString("OK")
 
