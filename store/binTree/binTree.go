@@ -8,10 +8,19 @@ import (
 	"sync"
 )
 
+type txnStatus int
+
+const (
+	InProgress txnStatus = iota
+	Aborted
+	Committed
+)
+
 type record struct {
 	value     string
-	timestamp uint64
-	expired   uint64
+	createdBy uint64
+	expiredBy uint64
+	status    txnStatus
 }
 
 type recordList struct {
@@ -53,8 +62,7 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 	var returnValue string
 	for i := len(recordList) - 1; i >= 0; i-- {
 		currRecord := recordList[i]
-		// TODO account for expiration
-		if timestamp >= currRecord.timestamp && (!activeTxns[currRecord.timestamp] || (activeTxns[currRecord.timestamp] && currRecord.timestamp == timestamp)) {
+		if currRecord.isVisible(timestamp, activeTxns) {
 			returnValue = currRecord.value
 			break
 		}
@@ -70,7 +78,7 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 
 func (tree *BinTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) error {
 
-	var newRecord = record{value: value, timestamp: timestamp, expired: 0}
+	var newRecord = record{value: value, createdBy: timestamp, expiredBy: 0}
 	var singleRecordList = recordList{key: key, records: []record{newRecord}}
 
 	err := tree.insert(key, singleRecordList, timestamp, activeTxns)
@@ -126,19 +134,20 @@ func (tree *BinTree) iterativeInsert(root *node, newNode *node, timestamp uint64
 			root = root.right
 
 		} else {
+			// Adding a version to an existing key
 			root.data.Lock()
 			defer root.data.Unlock()
 
 			// Check for concurrent write
-			lastRecord := root.data.records[len(root.data.records)-1]
-			if lastRecord.timestamp > timestamp {
-				return errors.New("A committed transaction wrote to this key")
-				//TODO check for node that should be deleted
-				//TODO decide if this should still error
-				// Is a long transaction writing over a quicker txn bad practice?
-			} else if activeTxns[lastRecord.timestamp] && lastRecord.timestamp != timestamp {
-				return errors.New("An active transaction wrote to this key")
-			}
+			root.data.records[len(root.data.records)-1].expiredBy = timestamp
+
+			// lastRecord.expiredBy = timestamp
+			// if lastRecord.createdBy > timestamp {
+			// 	return errors.New("A committed transaction wrote to this key")
+
+			// } else if activeTxns[lastRecord.createdBy] && lastRecord.createdBy != timestamp {
+			// 	return errors.New("An active transaction wrote to this key")
+			// }
 
 			root.data.records = append(root.data.records, newNode.data.records[0])
 			fmt.Println("new node inserted")
@@ -160,7 +169,7 @@ func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]
 		delNode.data.Lock()
 		defer delNode.data.Unlock()
 		recordLen := len(delNode.data.records)
-		delNode.data.records[recordLen-1].expired = timestamp
+		delNode.data.records[recordLen-1].expiredBy = timestamp
 		return nil
 	}
 	return errors.New("could not expire node that didnt exist")
@@ -253,6 +262,24 @@ func (tree *BinTree) Sorted() bool {
 	return true
 }
 
+func (currRecord *record) isVisible(txnID uint64, activeTxns map[uint64]bool) bool {
+	// We can't view results from transactions that started before us
+	if currRecord.createdBy > txnID {
+		return false
+	}
+	// We can't view a record if it's in an active transaction that isn't our own
+	if activeTxns[currRecord.createdBy] && currRecord.createdBy != txnID {
+		return false
+	}
+	// We can't view a record if
+	// - it's expired and not active
+	// - it's expired and the transaction iD is our own
+	if currRecord.expiredBy != 0 && (!activeTxns[currRecord.expiredBy] || currRecord.expiredBy == txnID) {
+		return false
+	}
+	return true
+}
+
 func (tree *BinTree) RecordListPrint(key string) string {
 	nodeToPrint := tree.Search(tree.root, key)
 	var sb strings.Builder
@@ -267,12 +294,12 @@ func (tree *BinTree) RecordListPrint(key string) string {
 		sb.WriteString(record.value)
 		sb.WriteString("   |")
 
-		sb.WriteString("timestamp: ")
-		sb.WriteString(strconv.Itoa(int(record.timestamp)))
+		sb.WriteString("created: ")
+		sb.WriteString(strconv.Itoa(int(record.createdBy)))
 		sb.WriteString("   |")
 
-		sb.WriteString("expiration: ")
-		sb.WriteString(strconv.Itoa(int(record.expired)))
+		sb.WriteString("expired: ")
+		sb.WriteString(strconv.Itoa(int(record.expiredBy)))
 		sb.WriteString("   |")
 		sb.WriteString("\n")
 	}
