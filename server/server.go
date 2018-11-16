@@ -1,8 +1,8 @@
 package main
 
 import (
+	"OttoDB/server/store/binTree"
 	"OttoDB/server/transactionManagers"
-	"OttoDB/store/binTree"
 	"fmt"
 	"log"
 	"runtime"
@@ -26,9 +26,10 @@ type store interface {
 
 var (
 	tree               = binTree.NewTree()
-	transactionID      uint64
+	transactionID      = uint64(1)
 	transactionManager = transactionManagers.NewClientMap()
 	activeTransactions = transactionManagers.NewActiveTxnMap()
+	transactionMap     = NewTransactionMap()
 )
 
 func main() {
@@ -45,13 +46,22 @@ func main() {
 			txID, inTransaction := transactionManager.Transactions[client]
 			transactionManager.RUnlock()
 
-			singleRunTxn := true
+			var transaction Transaction
+			var singleRunTxn bool
 			if !inTransaction {
-				txID := atomic.AddUint64(&transactionID, 1)
+				// Give new transaction a new transaction id
+				txID = atomic.AddUint64(&transactionID, 1)
 				fmt.Printf("Got a request from a non-transactioned client: %d\n", txID)
+				singleRunTxn = true
+				// Create a transaction obj for single run txn
+				transaction = NewTransaction(txID)
 			} else {
-				singleRunTxn = false
 				fmt.Printf("Got a request from a transactioned client: %d\n", txID)
+				singleRunTxn = false
+				// Grab the current txn obj for the txn
+				transactionMap.RLock()
+				transaction = transactionMap.Transactions[txID]
+				transactionMap.RUnlock()
 			}
 			activeTransactions.Lock()
 			activeTransactions.ActiveTransactions[txID] = true
@@ -69,13 +79,8 @@ func main() {
 				conn.WriteString("PONG")
 
 			case "quit":
-				activeTransactions.Lock()
-				defer activeTransactions.Unlock()
-				delete(activeTransactions.ActiveTransactions, txID)
-
-				transactionManager.Lock()
-				defer transactionManager.Unlock()
-				delete(transactionManager.Transactions, client)
+				removeTxnData(txID, activeTransactions)
+				removeClientData(client, transactionManager)
 
 				conn.WriteString("OK")
 				conn.Close()
@@ -85,13 +90,38 @@ func main() {
 					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 					return
 				}
-				err := tree.Set(string(cmd.Args[1]), string(cmd.Args[2]), txID, activeTxdSnapshot)
-				if singleRunTxn {
-					delete(activeTransactions.ActiveTransactions, txID)
-				}
+
+				expiredRecord, err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
 				if err != nil {
-					conn.WriteNull()
+					transaction.Abort()
+					removeTxnData(txID, activeTransactions)
+					removeClientData(client, transactionManager)
+					conn.WriteError("Txn Aborted: " + err.Error())
+					return
 				}
+				if expiredRecord != nil {
+					transaction.deletedRecords = append(transaction.deletedRecords, expiredRecord)
+				}
+
+				insertedRecord, err := tree.Set(string(cmd.Args[1]), string(cmd.Args[2]), txID, activeTxdSnapshot)
+				if err != nil {
+					transaction.Abort()
+					removeTxnData(txID, activeTransactions)
+					removeClientData(client, transactionManager)
+					conn.WriteError("Txn Aborted: " + err.Error())
+					return
+				}
+				transaction.insertedRecords = append(transaction.insertedRecords, insertedRecord)
+
+				if singleRunTxn {
+					activeTransactions.Lock()
+					delete(activeTransactions.ActiveTransactions, txID)
+					activeTransactions.Unlock()
+				}
+
+				transactionMap.Lock()
+				transactionMap.Transactions[transaction.timestamp] = transaction
+				transactionMap.Unlock()
 				conn.WriteString("OK")
 
 			case "get":
@@ -100,39 +130,55 @@ func main() {
 					return
 				}
 				keyVal, err := tree.Get(string(cmd.Args[1]), txID, activeTxdSnapshot)
-				if singleRunTxn {
-					activeTransactions.Lock()
-					defer activeTransactions.Unlock()
-					delete(activeTransactions.ActiveTransactions, txID)
-				}
 				if err != nil {
 					fmt.Print(err)
-					conn.WriteNull()
-				} else {
-					conn.WriteString(keyVal)
+					transaction.Abort()
+					removeTxnData(txID, activeTransactions)
+					removeClientData(client, transactionManager)
+					conn.WriteError("Txn Aborted: " + err.Error())
+					return
+				} else if singleRunTxn {
+					activeTransactions.Lock()
+					delete(activeTransactions.ActiveTransactions, txID)
+					activeTransactions.Unlock()
 				}
+				conn.WriteString(keyVal)
 
 			case "del":
 				if len(cmd.Args) != 2 {
 					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 					return
 				}
-				err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
+				expiredRecord, err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
+				if err != nil {
+					transaction.Abort()
+					removeTxnData(txID, activeTransactions)
+					removeClientData(client, transactionManager)
+					conn.WriteError("Txn Aborted: " + err.Error())
+					return
+				}
+				transaction.deletedRecords = append(transaction.deletedRecords, expiredRecord)
+
 				if singleRunTxn {
 					activeTransactions.Lock()
 					defer activeTransactions.Unlock()
 					delete(activeTransactions.ActiveTransactions, txID)
 				}
-				if err != nil {
-					conn.WriteNull()
-				} else {
-					conn.WriteString("OK")
-				}
+
+				transactionMap.Lock()
+				transactionMap.Transactions[transaction.timestamp] = transaction
+				transactionMap.Unlock()
+				conn.WriteString("OK")
 
 			case "begin":
 				transactionManager.Lock()
+				defer transactionManager.Unlock()
 				transactionManager.Transactions[client] = txID
-				transactionManager.Unlock()
+
+				transactionMap.Lock()
+				defer transactionMap.Unlock()
+				transactionMap.Transactions[txID] = transaction
+
 				conn.WriteString("OK")
 
 			case "commit":
@@ -148,6 +194,19 @@ func main() {
 			case "print":
 				nodeTimeStamps := tree.RecordListPrint(string(cmd.Args[1]))
 				conn.WriteString(nodeTimeStamps)
+
+			case "txnprint":
+				conn.WriteString(transaction.String())
+
+			case "abort":
+				// Abort the txn
+				transaction.Abort()
+
+				// Remove txn from active txns and client mapping txns
+				removeTxnData(txID, activeTransactions)
+				removeClientData(client, transactionManager)
+
+				conn.WriteError("Aborted txn from manual client call")
 			}
 		},
 		func(conn redcon.Conn) bool {
@@ -171,4 +230,16 @@ func shapshotActiveTransactions(supermap map[uint64]bool) map[uint64]bool {
 		resultMap[key] = value
 	}
 	return resultMap
+}
+
+func removeClientData(client string, transactionManager *transactionManagers.ClientTxdMap) {
+	transactionManager.Lock()
+	defer transactionManager.Unlock()
+	delete(transactionManager.Transactions, client)
+}
+
+func removeTxnData(txID uint64, activeTransactions *transactionManagers.ActiveTxdMap) {
+	activeTransactions.Lock()
+	defer activeTransactions.Unlock()
+	delete(activeTransactions.ActiveTransactions, txID)
 }

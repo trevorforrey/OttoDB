@@ -16,17 +16,18 @@ const (
 	Committed
 )
 
-type record struct {
-	value     string
-	createdBy uint64
-	expiredBy uint64
-	status    txnStatus
+type Record struct {
+	Value        string
+	CreatedBy    uint64
+	ExpiredBy    uint64
+	OldExpiredBy uint64
+	Status       txnStatus
 }
 
 type recordList struct {
 	sync.RWMutex
 	key     string
-	records []record
+	records []Record
 }
 
 type node struct {
@@ -52,9 +53,7 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 	if getNode == nil {
 		return "no value found", errors.New("No value found")
 	}
-	// if getNode.data.expired != 0 && getNode.data.expired <= timestamp && !activeTxns[getNode.data.expired] {
-	// 	return "the node has been deleted", nil
-	// }
+
 	recordList := getNode.data.records
 	fmt.Printf("Found key: %s\n", getNode.data.key)
 
@@ -63,7 +62,7 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 	for i := len(recordList) - 1; i >= 0; i-- {
 		currRecord := recordList[i]
 		if currRecord.isVisible(timestamp, activeTxns) {
-			returnValue = currRecord.value
+			returnValue = currRecord.Value
 			break
 		}
 	}
@@ -76,16 +75,16 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 	return "no value found", errors.New("No value for provided timestamp")
 }
 
-func (tree *BinTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) error {
+func (tree *BinTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) (*Record, error) {
 
-	var newRecord = record{value: value, createdBy: timestamp, expiredBy: 0}
-	var singleRecordList = recordList{key: key, records: []record{newRecord}}
+	var newRecord = Record{Value: value, CreatedBy: timestamp, ExpiredBy: 0}
+	var singleRecordList = recordList{key: key, records: []Record{newRecord}}
 
-	err := tree.insert(key, singleRecordList, timestamp, activeTxns)
+	insertedRecord, err := tree.insert(key, singleRecordList, timestamp, activeTxns)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return insertedRecord, nil
 }
 
 func (tree *BinTree) Search(root *node, key string) *node {
@@ -101,35 +100,38 @@ func (tree *BinTree) Search(root *node, key string) *node {
 	}
 }
 
-func (tree *BinTree) insert(key string, singleRecordList recordList, timestamp uint64, activeTxns map[uint64]bool) error {
+func (tree *BinTree) insert(key string, singleRecordList recordList, timestamp uint64, activeTxns map[uint64]bool) (*Record, error) {
 	newNode := node{}
 	newNode.data = singleRecordList
+	var insertedRecord *Record
 
 	if tree.root == nil {
 		tree.root = &newNode
+		insertedRecord = &newNode.data.records[0]
 	} else {
 		fmt.Println("calling to insert node")
-		err := tree.iterativeInsert(tree.root, &newNode, timestamp, activeTxns)
+		var err error
+		insertedRecord, err = tree.iterativeInsert(tree.root, &newNode, timestamp, activeTxns)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return insertedRecord, nil
 }
 
-func (tree *BinTree) iterativeInsert(root *node, newNode *node, timestamp uint64, activeTxns map[uint64]bool) error {
+func (tree *BinTree) iterativeInsert(root *node, newNode *node, timestamp uint64, activeTxns map[uint64]bool) (*Record, error) {
 	for {
 		if newNode.data.key < root.data.key {
 			if root.left == nil {
 				root.left = newNode
-				return nil
+				return &newNode.data.records[0], nil
 			}
 			root = root.left
 
 		} else if newNode.data.key > root.data.key {
 			if root.right == nil {
 				root.right = newNode
-				return nil
+				return &newNode.data.records[0], nil
 			}
 			root = root.right
 
@@ -139,19 +141,15 @@ func (tree *BinTree) iterativeInsert(root *node, newNode *node, timestamp uint64
 			defer root.data.Unlock()
 
 			// Check for concurrent write
-			root.data.records[len(root.data.records)-1].expiredBy = timestamp
+			lastRecord := root.data.records[len(root.data.records)-1]
 
-			// lastRecord.expiredBy = timestamp
-			// if lastRecord.createdBy > timestamp {
-			// 	return errors.New("A committed transaction wrote to this key")
-
-			// } else if activeTxns[lastRecord.createdBy] && lastRecord.createdBy != timestamp {
-			// 	return errors.New("An active transaction wrote to this key")
-			// }
+			if isAlreadyEdited, error := lastRecord.isConcurrentEdited(timestamp, activeTxns); isAlreadyEdited {
+				return nil, error
+			}
 
 			root.data.records = append(root.data.records, newNode.data.records[0])
 			fmt.Println("new node inserted")
-			return nil
+			return &newNode.data.records[0], nil
 		}
 	}
 }
@@ -163,16 +161,24 @@ func (tree *BinTree) getMinimum(currNode *node) *node {
 	return currNode
 }
 
-func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]bool) error {
+func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]bool) (*Record, error) {
 	delNode := tree.Search(tree.root, key)
 	if delNode != nil {
 		delNode.data.Lock()
 		defer delNode.data.Unlock()
+
 		recordLen := len(delNode.data.records)
-		delNode.data.records[recordLen-1].expiredBy = timestamp
-		return nil
+		delRecord := &delNode.data.records[recordLen-1]
+
+		if isAlreadyEdited, error := delRecord.isConcurrentEdited(timestamp, activeTxns); isAlreadyEdited {
+			return nil, error
+		}
+
+		delRecord.OldExpiredBy = delRecord.ExpiredBy
+		delRecord.ExpiredBy = timestamp
+		return &delNode.data.records[recordLen-1], nil
 	}
-	return errors.New("could not expire node that didnt exist")
+	return nil, nil
 }
 
 func (tree *BinTree) BreadthFirstTraversal() {
@@ -262,22 +268,45 @@ func (tree *BinTree) Sorted() bool {
 	return true
 }
 
-func (currRecord *record) isVisible(txnID uint64, activeTxns map[uint64]bool) bool {
+func (currRecord *Record) isVisible(txnID uint64, activeTxns map[uint64]bool) bool {
+	// We can't view a record if its been aborted
+	if currRecord.Status == Aborted {
+		return false
+	}
+
 	// We can't view results from transactions that started before us
-	if currRecord.createdBy > txnID {
+	if currRecord.CreatedBy > txnID {
 		return false
 	}
 	// We can't view a record if it's in an active transaction that isn't our own
-	if activeTxns[currRecord.createdBy] && currRecord.createdBy != txnID {
+	if activeTxns[currRecord.CreatedBy] && currRecord.CreatedBy != txnID {
 		return false
 	}
 	// We can't view a record if
 	// - it's expired and not active
 	// - it's expired and the transaction iD is our own
-	if currRecord.expiredBy != 0 && (!activeTxns[currRecord.expiredBy] || currRecord.expiredBy == txnID) {
+	if currRecord.ExpiredBy != 0 && (!activeTxns[currRecord.ExpiredBy] || currRecord.ExpiredBy == txnID) {
 		return false
 	}
 	return true
+}
+
+func (lastRecord *Record) isConcurrentEdited(txnID uint64, activeTxns map[uint64]bool) (bool, error) {
+	// Catches all committed and noncommitted future transaction writes
+	if lastRecord.CreatedBy > txnID {
+		return true, errors.New("A later transaction wrote/is writing to this key")
+	} else if activeTxns[lastRecord.CreatedBy] && lastRecord.CreatedBy != txnID {
+		// Catches all uncommitted previous transaction writes
+		return true, errors.New("An active transaction wrote to this key")
+	}
+
+	if lastRecord.ExpiredBy > txnID {
+		return true, errors.New("A later transaction deleted/is deleting this key")
+	} else if activeTxns[lastRecord.ExpiredBy] && lastRecord.ExpiredBy != txnID {
+		return true, errors.New("An active transaction is deleting this key")
+	}
+
+	return false, nil
 }
 
 func (tree *BinTree) RecordListPrint(key string) string {
@@ -291,15 +320,20 @@ func (tree *BinTree) RecordListPrint(key string) string {
 		sb.WriteString("   |")
 
 		sb.WriteString("value: ")
-		sb.WriteString(record.value)
+		sb.WriteString(record.Value)
 		sb.WriteString("   |")
 
 		sb.WriteString("created: ")
-		sb.WriteString(strconv.Itoa(int(record.createdBy)))
+		sb.WriteString(strconv.Itoa(int(record.CreatedBy)))
 		sb.WriteString("   |")
 
 		sb.WriteString("expired: ")
-		sb.WriteString(strconv.Itoa(int(record.expiredBy)))
+		sb.WriteString(strconv.Itoa(int(record.ExpiredBy)))
+		sb.WriteString("   |")
+		sb.WriteString("\n")
+
+		sb.WriteString("status: ")
+		sb.WriteString(strconv.Itoa(int(record.Status)))
 		sb.WriteString("   |")
 		sb.WriteString("\n")
 	}
