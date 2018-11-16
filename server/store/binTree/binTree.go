@@ -51,7 +51,7 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 	fmt.Printf("About to start tree search on %s\n", key)
 	getNode := tree.Search(tree.root, key)
 	if getNode == nil {
-		return "no value found", errors.New("No value found")
+		return "", errors.New("No value found")
 	}
 
 	recordList := getNode.data.records
@@ -72,7 +72,7 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 		fmt.Printf("Going to send value: %s\n", returnValue)
 		return returnValue, nil
 	}
-	return "no value found", errors.New("No value for provided timestamp")
+	return "", errors.New("No value for provided timestamp")
 }
 
 func (tree *BinTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) (*Record, error) {

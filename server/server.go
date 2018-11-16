@@ -132,10 +132,7 @@ func main() {
 				keyVal, err := tree.Get(string(cmd.Args[1]), txID, activeTxdSnapshot)
 				if err != nil {
 					fmt.Print(err)
-					transaction.Abort()
-					removeTxnData(txID, activeTransactions)
-					removeClientData(client, transactionManager)
-					conn.WriteError("Txn Aborted: " + err.Error())
+					conn.WriteNull()
 					return
 				} else if singleRunTxn {
 					activeTransactions.Lock()
