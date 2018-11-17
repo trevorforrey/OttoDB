@@ -3,11 +3,17 @@ package main
 import (
 	"OttoDB/server/store/binTree"
 	"OttoDB/server/transactionManagers"
+	"bytes"
+	"encoding/binary"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"os"
 	"runtime"
 	"strings"
 	"sync/atomic"
+
+	"github.com/golang/protobuf/proto"
 
 	"github.com/tidwall/redcon"
 )
@@ -24,13 +30,19 @@ type store interface {
 	Del() string
 }
 
+type length int64
+
 var (
 	tree               = binTree.NewTree()
 	transactionID      = uint64(1)
 	transactionManager = transactionManagers.NewClientMap()
 	activeTransactions = transactionManagers.NewActiveTxnMap()
 	transactionMap     = NewTransactionMap()
+	endianness         = binary.LittleEndian
 )
+
+const walPath = "store.pb"
+const sizeOfLength = 8
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
@@ -70,6 +82,8 @@ func main() {
 			activeTransactions.RLock()
 			activeTxdSnapshot := shapshotActiveTransactions(activeTransactions.ActiveTransactions)
 			activeTransactions.RUnlock()
+
+			writeToLog(cmd, txID)
 
 			switch strings.ToLower(string(cmd.Args[0])) {
 			default:
@@ -204,6 +218,11 @@ func main() {
 				removeClientData(client, transactionManager)
 
 				conn.WriteError("Aborted txn from manual client call")
+
+			case "printw":
+				if err := printWal(); err != nil {
+					fmt.Printf(err.Error())
+				}
 			}
 		},
 		func(conn redcon.Conn) bool {
@@ -239,4 +258,66 @@ func removeTxnData(txID uint64, activeTransactions *transactionManagers.ActiveTx
 	activeTransactions.Lock()
 	defer activeTransactions.Unlock()
 	delete(activeTransactions.ActiveTransactions, txID)
+}
+
+func writeToLog(cmd redcon.Command, txID uint64) error {
+	if len(cmd.Args) == 3 {
+		operation := &Operation{
+			TxID:  txID,
+			Op:    string(cmd.Args[0]),
+			Key:   string(cmd.Args[1]),
+			Value: string(cmd.Args[2]),
+		}
+		b, err := proto.Marshal(operation)
+		if err != nil {
+			return fmt.Errorf("could not encode operation: %v", err)
+		}
+
+		f, err := os.OpenFile(walPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			return fmt.Errorf("could not open %s: %v", walPath, err)
+		}
+
+		if err := binary.Write(f, endianness, length(len(b))); err != nil {
+			return fmt.Errorf("could not enocde length of message: %v", err)
+		}
+		_, err = f.Write(b)
+		if err != nil {
+			return fmt.Errorf("could not write task to file: %v", err)
+		}
+
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("could not close file %s: %v", walPath, err)
+		}
+	}
+	return nil
+}
+
+func printWal() error {
+	b, err := ioutil.ReadFile(walPath)
+	if err != nil {
+		return fmt.Errorf("could not read %s: %v", walPath, err)
+	}
+
+	for {
+		if len(b) == 0 {
+			return nil
+		} else if len(b) < sizeOfLength {
+			return fmt.Errorf("bytes not correct size")
+		}
+
+		var l length
+		if err := binary.Read(bytes.NewReader(b[:sizeOfLength]), endianness, &l); err != nil {
+			return fmt.Errorf("could not decode message length: %v", err)
+		}
+		b = b[sizeOfLength:]
+
+		var operation Operation
+		if err := proto.Unmarshal(b[:l], &operation); err != nil {
+			return fmt.Errorf("Could not read operation: %v", err)
+		}
+		b = b[l:]
+
+		fmt.Printf("Txn: %d,\tOp: %s\tKey: %s\tVal: %s\n", operation.TxID, operation.Op, operation.Key, operation.Value)
+	}
 }
