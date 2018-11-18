@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -116,6 +117,7 @@ func main() {
 
 				expiredRecord, err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
 				if err != nil {
+					writeAbortToLog(txID)
 					transaction.Abort()
 					removeTxnData(txID, activeTransactions)
 					removeClientData(client, transactionManager)
@@ -128,6 +130,7 @@ func main() {
 
 				insertedRecord, err := tree.Set(string(cmd.Args[1]), string(cmd.Args[2]), txID, activeTxdSnapshot)
 				if err != nil {
+					writeAbortToLog(txID)
 					transaction.Abort()
 					removeTxnData(txID, activeTransactions)
 					removeClientData(client, transactionManager)
@@ -171,6 +174,7 @@ func main() {
 				}
 				expiredRecord, err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
 				if err != nil {
+					writeAbortToLog(txID)
 					transaction.Abort()
 					removeTxnData(txID, activeTransactions)
 					removeClientData(client, transactionManager)
@@ -219,6 +223,7 @@ func main() {
 				conn.WriteString(transaction.String())
 
 			case "abort":
+				writeAbortToLog(txID)
 				// Abort the txn
 				transaction.Abort()
 
@@ -320,6 +325,19 @@ func writeToLog(operation *Operation, txID uint64) error {
 	return nil
 }
 
+func writeAbortToLog(txID uint64) error {
+	operation := &Operation{
+		TxID: txID,
+		Op:   "abort",
+	}
+
+	err := writeToLog(operation, txID)
+	if err != nil {
+		return fmt.Errorf("error writing abort to log: %v", err)
+	}
+	return nil
+}
+
 func printWal() error {
 	b, err := ioutil.ReadFile(walPath)
 	if err != nil {
@@ -365,7 +383,7 @@ func replayLog(tree *binTree.BinTree) (uint64, error) {
 
 	for {
 		if len(b) == 0 {
-			return lastTxn, nil
+			break
 		} else if len(b) < sizeOfLength {
 			return 0, fmt.Errorf("bytes not correct size")
 		}
@@ -385,7 +403,9 @@ func replayLog(tree *binTree.BinTree) (uint64, error) {
 		// Replaying the txn on the in-memory store
 		fmt.Printf("Txn: %d,\tOp: %s\tKey: %s\tVal: %s\n", operation.TxID, operation.Op, operation.Key, operation.Value)
 
-		lastTxn = operation.TxID
+		if operation.TxID > lastTxn {
+			lastTxn = operation.TxID
+		}
 
 		// Get transaction, and determine if one already exists for the txID
 		transaction, inTransaction := transactionMap.Transactions[operation.TxID]
@@ -394,12 +414,25 @@ func replayLog(tree *binTree.BinTree) (uint64, error) {
 		}
 
 		if operation.Op == "abort" {
-			transaction.Abort()
+			delete(transactionMap.Transactions, operation.TxID)
 		} else {
-			err := transaction.Execute(tree, operation)
-			if err != nil {
-				return 0, err
-			}
+			transaction.replayOps = append(transaction.replayOps, operation)
+			transactionMap.Transactions[operation.TxID] = transaction
 		}
 	}
+
+	transactions := make([]uint64, 0)
+	for txnID := range transactionMap.Transactions {
+		transactions = append(transactions, txnID)
+	}
+	sort.Slice(transactions, func(i, j int) bool { return transactions[i] < transactions[j] })
+	for _, transactionID := range transactions {
+		fmt.Printf("About to batch perform txn: %d", transactionID)
+		txn := transactionMap.Transactions[transactionID]
+		err := txn.BatchExecute(tree)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return lastTxn, nil
 }

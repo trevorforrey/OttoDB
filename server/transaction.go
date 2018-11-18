@@ -9,10 +9,10 @@ import (
 )
 
 type Transaction struct {
-	timestamp                        uint64
-	insertedRecords                  []*binTree.Record
-	deletedRecords                   []*binTree.Record
-	deletedRecordsPreviousExpiration []uint64
+	timestamp       uint64
+	insertedRecords []*binTree.Record
+	deletedRecords  []*binTree.Record
+	replayOps       []Operation
 }
 
 type TransactionMap struct {
@@ -33,6 +33,8 @@ func (txn *Transaction) Abort() {
 	for _, record := range txn.deletedRecords {
 		record.ExpiredBy = record.OldExpiredBy
 	}
+
+	fmt.Printf("Inserted record size: %d", len(txn.insertedRecords))
 
 	// set inserted nodes as aborted
 	for _, record := range txn.insertedRecords {
@@ -95,7 +97,9 @@ func (txn *Transaction) Execute(tree *binTree.BinTree, operation Operation) erro
 			txn.Abort()
 			return fmt.Errorf("Ran into an error whil expiring key: %s on txn: %d", operation.Key, operation.TxID)
 		}
-		txn.deletedRecords = append(txn.deletedRecords, expiredRecord)
+		if expiredRecord != nil {
+			txn.deletedRecords = append(txn.deletedRecords, expiredRecord)
+		}
 
 		insertedRecord, err := tree.SetReplay(operation.Key, operation.Value, operation.TxID)
 		if err != nil {
@@ -117,4 +121,14 @@ func (txn *Transaction) Execute(tree *binTree.BinTree, operation Operation) erro
 	default:
 		return nil
 	}
+}
+
+func (txn *Transaction) BatchExecute(tree *binTree.BinTree) error {
+	for _, operation := range txn.replayOps {
+		err := txn.Execute(tree, operation)
+		if err != nil {
+			return fmt.Errorf("Received error during batch execute: %v", err)
+		}
+	}
+	return nil
 }
