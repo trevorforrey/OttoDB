@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package main;
+
+message Operation {
+    uint64 txID = 1;
+    string op = 2;
+    string key = 3;
+    string value = 4;
+}
