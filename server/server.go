@@ -41,14 +41,20 @@ var (
 	endianness         = binary.LittleEndian
 )
 
-const walPath = "store.pb"
+const walPath = "./store.pb"
 const sizeOfLength = 8
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	addr := ":8080"
 
-	err := redcon.ListenAndServe(addr,
+	lastTxn, err := replayLog(tree)
+	if err != nil {
+		fmt.Printf("Error while replaying log: %v", err)
+	}
+	transactionID = lastTxn + 1
+
+	err = redcon.ListenAndServe(addr,
 		func(conn redcon.Conn, cmd redcon.Command) {
 
 			client := conn.NetConn().RemoteAddr().String()
@@ -83,7 +89,10 @@ func main() {
 			activeTxdSnapshot := shapshotActiveTransactions(activeTransactions.ActiveTransactions)
 			activeTransactions.RUnlock()
 
-			writeToLog(cmd, txID)
+			operation, err := turnToOp(cmd, txID)
+			if err == nil {
+				writeToLog(operation, txID)
+			}
 
 			switch strings.ToLower(string(cmd.Args[0])) {
 			default:
@@ -260,35 +269,53 @@ func removeTxnData(txID uint64, activeTransactions *transactionManagers.ActiveTx
 	delete(activeTransactions.ActiveTransactions, txID)
 }
 
-func writeToLog(cmd redcon.Command, txID uint64) error {
-	if len(cmd.Args) == 3 {
-		operation := &Operation{
+func turnToOp(cmd redcon.Command, txID uint64) (*Operation, error) {
+	commandSize := len(cmd.Args)
+	switch commandSize {
+	case 1:
+		return &Operation{
+			TxID: txID,
+			Op:   string(cmd.Args[0]),
+		}, nil
+	case 2:
+		return &Operation{
+			TxID: txID,
+			Op:   string(cmd.Args[0]),
+			Key:  string(cmd.Args[1]),
+		}, nil
+	case 3:
+		return &Operation{
 			TxID:  txID,
 			Op:    string(cmd.Args[0]),
 			Key:   string(cmd.Args[1]),
 			Value: string(cmd.Args[2]),
-		}
-		b, err := proto.Marshal(operation)
-		if err != nil {
-			return fmt.Errorf("could not encode operation: %v", err)
-		}
+		}, nil
+	default:
+		return nil, fmt.Errorf("Unsupported command provided")
+	}
+}
 
-		f, err := os.OpenFile(walPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
-		if err != nil {
-			return fmt.Errorf("could not open %s: %v", walPath, err)
-		}
+func writeToLog(operation *Operation, txID uint64) error {
+	b, err := proto.Marshal(operation)
+	if err != nil {
+		return fmt.Errorf("could not encode operation: %v", err)
+	}
 
-		if err := binary.Write(f, endianness, length(len(b))); err != nil {
-			return fmt.Errorf("could not enocde length of message: %v", err)
-		}
-		_, err = f.Write(b)
-		if err != nil {
-			return fmt.Errorf("could not write task to file: %v", err)
-		}
+	f, err := os.OpenFile(walPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		return fmt.Errorf("could not open %s: %v", walPath, err)
+	}
 
-		if err := f.Close(); err != nil {
-			return fmt.Errorf("could not close file %s: %v", walPath, err)
-		}
+	if err := binary.Write(f, endianness, length(len(b))); err != nil {
+		return fmt.Errorf("could not enocde length of message: %v", err)
+	}
+	_, err = f.Write(b)
+	if err != nil {
+		return fmt.Errorf("could not write task to file: %v", err)
+	}
+
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("could not close file %s: %v", walPath, err)
 	}
 	return nil
 }
@@ -319,5 +346,60 @@ func printWal() error {
 		b = b[l:]
 
 		fmt.Printf("Txn: %d,\tOp: %s\tKey: %s\tVal: %s\n", operation.TxID, operation.Op, operation.Key, operation.Value)
+	}
+}
+
+func replayLog(tree *binTree.BinTree) (uint64, error) {
+
+	if _, err := os.Stat(walPath); os.IsNotExist(err) {
+		return 0, nil
+	}
+
+	b, err := ioutil.ReadFile(walPath)
+	if err != nil {
+		return 0, fmt.Errorf("could not read %s: %v", walPath, err)
+	}
+
+	transactionMap := NewTransactionMap()
+	var lastTxn uint64
+
+	for {
+		if len(b) == 0 {
+			return lastTxn, nil
+		} else if len(b) < sizeOfLength {
+			return 0, fmt.Errorf("bytes not correct size")
+		}
+
+		var l length
+		if err := binary.Read(bytes.NewReader(b[:sizeOfLength]), endianness, &l); err != nil {
+			return 0, fmt.Errorf("could not decode message length: %v", err)
+		}
+		b = b[sizeOfLength:]
+
+		var operation Operation
+		if err := proto.Unmarshal(b[:l], &operation); err != nil {
+			return 0, fmt.Errorf("Could not read operation: %v", err)
+		}
+		b = b[l:]
+
+		// Replaying the txn on the in-memory store
+		fmt.Printf("Txn: %d,\tOp: %s\tKey: %s\tVal: %s\n", operation.TxID, operation.Op, operation.Key, operation.Value)
+
+		lastTxn = operation.TxID
+
+		// Get transaction, and determine if one already exists for the txID
+		transaction, inTransaction := transactionMap.Transactions[operation.TxID]
+		if !inTransaction {
+			transaction = NewTransaction(operation.TxID)
+		}
+
+		if operation.Op == "abort" {
+			transaction.Abort()
+		} else {
+			err := transaction.Execute(tree, operation)
+			if err != nil {
+				return 0, err
+			}
+		}
 	}
 }
