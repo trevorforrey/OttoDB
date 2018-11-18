@@ -181,6 +181,20 @@ func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]
 	return nil, nil
 }
 
+// Expire with active txns ignored (used for replaying log)
+func (tree *BinTree) ExpireReplay(key string, timestamp uint64) (*Record, error) {
+	delNode := tree.Search(tree.root, key)
+	if delNode != nil {
+		recordLen := len(delNode.data.records)
+		delRecord := &delNode.data.records[recordLen-1]
+
+		delRecord.OldExpiredBy = delRecord.ExpiredBy
+		delRecord.ExpiredBy = timestamp
+		return &delNode.data.records[recordLen-1], nil
+	}
+	return nil, nil
+}
+
 func (tree *BinTree) BreadthFirstTraversal() {
 	if tree.root == nil {
 		return
@@ -338,4 +352,59 @@ func (tree *BinTree) RecordListPrint(key string) string {
 		sb.WriteString("\n")
 	}
 	return sb.String()
+}
+
+func (tree *BinTree) SetReplay(key string, value string, timestamp uint64) (*Record, error) {
+
+	var newRecord = Record{Value: value, CreatedBy: timestamp, ExpiredBy: 0}
+	var singleRecordList = recordList{key: key, records: []Record{newRecord}}
+
+	insertedRecord, err := tree.insertReplay(key, singleRecordList, timestamp)
+	if err != nil {
+		return nil, err
+	}
+	return insertedRecord, nil
+}
+
+func (tree *BinTree) insertReplay(key string, singleRecordList recordList, timestamp uint64) (*Record, error) {
+	newNode := node{}
+	newNode.data = singleRecordList
+	var insertedRecord *Record
+
+	if tree.root == nil {
+		tree.root = &newNode
+		insertedRecord = &newNode.data.records[0]
+	} else {
+		fmt.Println("calling to insert node")
+		var err error
+		insertedRecord, err = tree.iterativeInsertReplay(tree.root, &newNode, timestamp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return insertedRecord, nil
+}
+
+func (tree *BinTree) iterativeInsertReplay(root *node, newNode *node, timestamp uint64) (*Record, error) {
+	for {
+		if newNode.data.key < root.data.key {
+			if root.left == nil {
+				root.left = newNode
+				return &newNode.data.records[0], nil
+			}
+			root = root.left
+
+		} else if newNode.data.key > root.data.key {
+			if root.right == nil {
+				root.right = newNode
+				return &newNode.data.records[0], nil
+			}
+			root = root.right
+
+		} else {
+			root.data.records = append(root.data.records, newNode.data.records[0])
+			fmt.Println("new node inserted")
+			return &newNode.data.records[0], nil
+		}
+	}
 }
