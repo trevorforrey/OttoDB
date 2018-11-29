@@ -181,6 +181,11 @@ func main() {
 					conn.WriteError("Txn Aborted: " + err.Error())
 					return
 				}
+				if expiredRecord == nil {
+					conn.WriteNull()
+					return
+				}
+
 				transaction.deletedRecords = append(transaction.deletedRecords, expiredRecord)
 
 				if singleRunTxn {
