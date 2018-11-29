@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package main;
+package logprotobuf;
 
 message Operation {
     uint64 txID = 1;

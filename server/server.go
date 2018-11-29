@@ -1,29 +1,19 @@
 package main
 
 import (
+	"OttoDB/server/oplog"
+	"OttoDB/server/oplog/logprotobuf"
 	"OttoDB/server/store/binTree"
+	"OttoDB/server/transaction"
 	"OttoDB/server/transactionManagers"
-	"bytes"
-	"encoding/binary"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"os"
 	"runtime"
-	"sort"
 	"strings"
 	"sync/atomic"
 
-	"github.com/golang/protobuf/proto"
-
 	"github.com/tidwall/redcon"
 )
-
-type operation struct {
-	op    string
-	key   string
-	value string
-}
 
 type store interface {
 	Get() string
@@ -31,25 +21,19 @@ type store interface {
 	Del() string
 }
 
-type length int64
-
 var (
 	tree               = binTree.NewTree()
 	transactionID      = uint64(1)
 	transactionManager = transactionManagers.NewClientMap()
 	activeTransactions = transactionManagers.NewActiveTxnMap()
-	transactionMap     = NewTransactionMap()
-	endianness         = binary.LittleEndian
+	transactionMap     = transaction.NewTransactionMap()
 )
-
-const walPath = "./store.pb"
-const sizeOfLength = 8
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	addr := ":8080"
 
-	lastTxn, err := replayLog(tree)
+	lastTxn, err := oplog.ReplayLog(tree)
 	if err != nil {
 		fmt.Printf("Error while replaying log: %v", err)
 	}
@@ -65,7 +49,7 @@ func main() {
 			txID, inTransaction := transactionManager.Transactions[client]
 			transactionManager.RUnlock()
 
-			var transaction Transaction
+			var txn transaction.Transaction
 			var singleRunTxn bool
 			if !inTransaction {
 				// Give new transaction a new transaction id
@@ -73,13 +57,13 @@ func main() {
 				fmt.Printf("Got a request from a non-transactioned client: %d\n", txID)
 				singleRunTxn = true
 				// Create a transaction obj for single run txn
-				transaction = NewTransaction(txID)
+				txn = transaction.NewTransaction(txID)
 			} else {
 				fmt.Printf("Got a request from a transactioned client: %d\n", txID)
 				singleRunTxn = false
 				// Grab the current txn obj for the txn
 				transactionMap.RLock()
-				transaction = transactionMap.Transactions[txID]
+				txn = transactionMap.Transactions[txID]
 				transactionMap.RUnlock()
 			}
 			activeTransactions.Lock()
@@ -92,7 +76,7 @@ func main() {
 
 			operation, err := turnToOp(cmd, txID)
 			if err == nil {
-				writeToLog(operation, txID)
+				oplog.WriteToLog(operation, txID)
 			}
 
 			switch strings.ToLower(string(cmd.Args[0])) {
@@ -117,27 +101,27 @@ func main() {
 
 				expiredRecord, err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
 				if err != nil {
-					writeAbortToLog(txID)
-					transaction.Abort()
+					oplog.WriteAbortToLog(txID)
+					txn.Abort()
 					removeTxnData(txID, activeTransactions)
 					removeClientData(client, transactionManager)
 					conn.WriteError("Txn Aborted: " + err.Error())
 					return
 				}
 				if expiredRecord != nil {
-					transaction.deletedRecords = append(transaction.deletedRecords, expiredRecord)
+					txn.DeletedRecords = append(txn.DeletedRecords, expiredRecord)
 				}
 
 				insertedRecord, err := tree.Set(string(cmd.Args[1]), string(cmd.Args[2]), txID, activeTxdSnapshot)
 				if err != nil {
-					writeAbortToLog(txID)
-					transaction.Abort()
+					oplog.WriteAbortToLog(txID)
+					txn.Abort()
 					removeTxnData(txID, activeTransactions)
 					removeClientData(client, transactionManager)
 					conn.WriteError("Txn Aborted: " + err.Error())
 					return
 				}
-				transaction.insertedRecords = append(transaction.insertedRecords, insertedRecord)
+				txn.InsertedRecords = append(txn.InsertedRecords, insertedRecord)
 
 				if singleRunTxn {
 					activeTransactions.Lock()
@@ -146,7 +130,7 @@ func main() {
 				}
 
 				transactionMap.Lock()
-				transactionMap.Transactions[transaction.timestamp] = transaction
+				transactionMap.Transactions[txn.Timestamp] = txn
 				transactionMap.Unlock()
 				conn.WriteString("OK")
 
@@ -174,8 +158,8 @@ func main() {
 				}
 				expiredRecord, err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
 				if err != nil {
-					writeAbortToLog(txID)
-					transaction.Abort()
+					oplog.WriteAbortToLog(txID)
+					txn.Abort()
 					removeTxnData(txID, activeTransactions)
 					removeClientData(client, transactionManager)
 					conn.WriteError("Txn Aborted: " + err.Error())
@@ -186,7 +170,7 @@ func main() {
 					return
 				}
 
-				transaction.deletedRecords = append(transaction.deletedRecords, expiredRecord)
+				txn.DeletedRecords = append(txn.DeletedRecords, expiredRecord)
 
 				if singleRunTxn {
 					activeTransactions.Lock()
@@ -195,7 +179,7 @@ func main() {
 				}
 
 				transactionMap.Lock()
-				transactionMap.Transactions[transaction.timestamp] = transaction
+				transactionMap.Transactions[txn.Timestamp] = txn
 				transactionMap.Unlock()
 				conn.WriteString("OK")
 
@@ -206,7 +190,7 @@ func main() {
 
 				transactionMap.Lock()
 				defer transactionMap.Unlock()
-				transactionMap.Transactions[txID] = transaction
+				transactionMap.Transactions[txID] = txn
 
 				conn.WriteString("OK")
 
@@ -225,12 +209,12 @@ func main() {
 				conn.WriteString(nodeTimeStamps)
 
 			case "txnprint":
-				conn.WriteString(transaction.String())
+				conn.WriteString(txn.String())
 
 			case "abort":
-				writeAbortToLog(txID)
+				oplog.WriteAbortToLog(txID)
 				// Abort the txn
-				transaction.Abort()
+				txn.Abort()
 
 				// Remove txn from active txns and client mapping txns
 				removeTxnData(txID, activeTransactions)
@@ -239,7 +223,7 @@ func main() {
 				conn.WriteError("Aborted txn from manual client call")
 
 			case "printw":
-				if err := printWal(); err != nil {
+				if err := oplog.PrintWal(); err != nil {
 					fmt.Printf(err.Error())
 				}
 			}
@@ -279,22 +263,22 @@ func removeTxnData(txID uint64, activeTransactions *transactionManagers.ActiveTx
 	delete(activeTransactions.ActiveTransactions, txID)
 }
 
-func turnToOp(cmd redcon.Command, txID uint64) (*Operation, error) {
+func turnToOp(cmd redcon.Command, txID uint64) (*logprotobuf.Operation, error) {
 	commandSize := len(cmd.Args)
 	switch commandSize {
 	case 1:
-		return &Operation{
+		return &logprotobuf.Operation{
 			TxID: txID,
 			Op:   string(cmd.Args[0]),
 		}, nil
 	case 2:
-		return &Operation{
+		return &logprotobuf.Operation{
 			TxID: txID,
 			Op:   string(cmd.Args[0]),
 			Key:  string(cmd.Args[1]),
 		}, nil
 	case 3:
-		return &Operation{
+		return &logprotobuf.Operation{
 			TxID:  txID,
 			Op:    string(cmd.Args[0]),
 			Key:   string(cmd.Args[1]),
@@ -303,141 +287,4 @@ func turnToOp(cmd redcon.Command, txID uint64) (*Operation, error) {
 	default:
 		return nil, fmt.Errorf("Unsupported command provided")
 	}
-}
-
-func writeToLog(operation *Operation, txID uint64) error {
-	b, err := proto.Marshal(operation)
-	if err != nil {
-		return fmt.Errorf("could not encode operation: %v", err)
-	}
-
-	f, err := os.OpenFile(walPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
-	if err != nil {
-		return fmt.Errorf("could not open %s: %v", walPath, err)
-	}
-
-	if err := binary.Write(f, endianness, length(len(b))); err != nil {
-		return fmt.Errorf("could not enocde length of message: %v", err)
-	}
-	_, err = f.Write(b)
-	if err != nil {
-		return fmt.Errorf("could not write task to file: %v", err)
-	}
-
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("could not close file %s: %v", walPath, err)
-	}
-	return nil
-}
-
-func writeAbortToLog(txID uint64) error {
-	operation := &Operation{
-		TxID: txID,
-		Op:   "abort",
-	}
-
-	err := writeToLog(operation, txID)
-	if err != nil {
-		return fmt.Errorf("error writing abort to log: %v", err)
-	}
-	return nil
-}
-
-func printWal() error {
-	b, err := ioutil.ReadFile(walPath)
-	if err != nil {
-		return fmt.Errorf("could not read %s: %v", walPath, err)
-	}
-
-	for {
-		if len(b) == 0 {
-			return nil
-		} else if len(b) < sizeOfLength {
-			return fmt.Errorf("bytes not correct size")
-		}
-
-		var l length
-		if err := binary.Read(bytes.NewReader(b[:sizeOfLength]), endianness, &l); err != nil {
-			return fmt.Errorf("could not decode message length: %v", err)
-		}
-		b = b[sizeOfLength:]
-
-		var operation Operation
-		if err := proto.Unmarshal(b[:l], &operation); err != nil {
-			return fmt.Errorf("Could not read operation: %v", err)
-		}
-		b = b[l:]
-
-		fmt.Printf("Txn: %d,\tOp: %s\tKey: %s\tVal: %s\n", operation.TxID, operation.Op, operation.Key, operation.Value)
-	}
-}
-
-func replayLog(tree *binTree.BinTree) (uint64, error) {
-
-	if _, err := os.Stat(walPath); os.IsNotExist(err) {
-		return 0, nil
-	}
-
-	b, err := ioutil.ReadFile(walPath)
-	if err != nil {
-		return 0, fmt.Errorf("could not read %s: %v", walPath, err)
-	}
-
-	transactionMap := NewTransactionMap()
-	var lastTxn uint64
-
-	for {
-		if len(b) == 0 {
-			break
-		} else if len(b) < sizeOfLength {
-			return 0, fmt.Errorf("bytes not correct size")
-		}
-
-		var l length
-		if err := binary.Read(bytes.NewReader(b[:sizeOfLength]), endianness, &l); err != nil {
-			return 0, fmt.Errorf("could not decode message length: %v", err)
-		}
-		b = b[sizeOfLength:]
-
-		var operation Operation
-		if err := proto.Unmarshal(b[:l], &operation); err != nil {
-			return 0, fmt.Errorf("Could not read operation: %v", err)
-		}
-		b = b[l:]
-
-		// Replaying the txn on the in-memory store
-		fmt.Printf("Txn: %d,\tOp: %s\tKey: %s\tVal: %s\n", operation.TxID, operation.Op, operation.Key, operation.Value)
-
-		if operation.TxID > lastTxn {
-			lastTxn = operation.TxID
-		}
-
-		// Get transaction, and determine if one already exists for the txID
-		transaction, inTransaction := transactionMap.Transactions[operation.TxID]
-		if !inTransaction {
-			transaction = NewTransaction(operation.TxID)
-		}
-
-		if operation.Op == "abort" {
-			delete(transactionMap.Transactions, operation.TxID)
-		} else {
-			transaction.replayOps = append(transaction.replayOps, operation)
-			transactionMap.Transactions[operation.TxID] = transaction
-		}
-	}
-
-	transactions := make([]uint64, 0)
-	for txnID := range transactionMap.Transactions {
-		transactions = append(transactions, txnID)
-	}
-	sort.Slice(transactions, func(i, j int) bool { return transactions[i] < transactions[j] })
-	for _, transactionID := range transactions {
-		fmt.Printf("About to batch perform txn: %d", transactionID)
-		txn := transactionMap.Transactions[transactionID]
-		err := txn.BatchExecute(tree)
-		if err != nil {
-			return 0, err
-		}
-	}
-	return lastTxn, nil
 }

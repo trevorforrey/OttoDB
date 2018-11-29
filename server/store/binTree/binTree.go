@@ -146,7 +146,7 @@ func (tree *BinTree) iterativeInsert(root *node, newNode *node, timestamp uint64
 
 			root.data.records = append(root.data.records, newNode.data.records[0])
 			fmt.Println("new node inserted")
-			return &newNode.data.records[0], nil
+			return &root.data.records[len(root.data.records)-1], nil
 		}
 	}
 }
