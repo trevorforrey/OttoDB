@@ -1,6 +1,7 @@
 package binTree
 
 import (
+	"OttoDB/server/store/record"
 	"errors"
 	"fmt"
 	"strconv"
@@ -16,18 +17,10 @@ const (
 	Committed
 )
 
-type Record struct {
-	Value        string
-	CreatedBy    uint64
-	ExpiredBy    uint64
-	OldExpiredBy uint64
-	Status       txnStatus
-}
-
 type recordList struct {
 	sync.RWMutex
 	key     string
-	records []Record
+	records []record.Record
 }
 
 type node struct {
@@ -59,11 +52,15 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 
 	// Find value scoped in current timestamp that's committed
 	var returnValue string
+	var nonVisibleRecords []uint64
 	for i := len(recordList) - 1; i >= 0; i-- {
 		currRecord := recordList[i]
-		if currRecord.isVisible(timestamp, activeTxns) {
+		if currRecord.IsVisible(timestamp, activeTxns) {
 			returnValue = currRecord.Value
 			break
+		} else {
+			// Won't work all the time, could be the case where it's deleted, but doesn't cause a rw antidep
+			nonVisibleRecords = append(nonVisibleRecords, currRecord.CreatedBy)
 		}
 	}
 
@@ -75,10 +72,10 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 	return "", errors.New("No value for provided timestamp")
 }
 
-func (tree *BinTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) (*Record, error) {
+func (tree *BinTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
 
-	var newRecord = Record{Value: value, CreatedBy: timestamp, ExpiredBy: 0}
-	var singleRecordList = recordList{key: key, records: []Record{newRecord}}
+	var newRecord = record.NewRecord(value, timestamp)
+	var singleRecordList = recordList{key: key, records: []record.Record{newRecord}}
 
 	insertedRecord, err := tree.insert(key, singleRecordList, timestamp, activeTxns)
 	if err != nil {
@@ -100,10 +97,10 @@ func (tree *BinTree) Search(root *node, key string) *node {
 	}
 }
 
-func (tree *BinTree) insert(key string, singleRecordList recordList, timestamp uint64, activeTxns map[uint64]bool) (*Record, error) {
+func (tree *BinTree) insert(key string, singleRecordList recordList, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
 	newNode := node{}
 	newNode.data = singleRecordList
-	var insertedRecord *Record
+	var insertedRecord *record.Record
 
 	if tree.root == nil {
 		tree.root = &newNode
@@ -119,7 +116,7 @@ func (tree *BinTree) insert(key string, singleRecordList recordList, timestamp u
 	return insertedRecord, nil
 }
 
-func (tree *BinTree) iterativeInsert(root *node, newNode *node, timestamp uint64, activeTxns map[uint64]bool) (*Record, error) {
+func (tree *BinTree) iterativeInsert(root *node, newNode *node, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
 	for {
 		if newNode.data.key < root.data.key {
 			if root.left == nil {
@@ -143,7 +140,7 @@ func (tree *BinTree) iterativeInsert(root *node, newNode *node, timestamp uint64
 			// Check for concurrent write
 			lastRecord := root.data.records[len(root.data.records)-1]
 
-			if isAlreadyEdited, error := lastRecord.isConcurrentEdited(timestamp, activeTxns); isAlreadyEdited {
+			if isAlreadyEdited, error := lastRecord.IsConcurrentEdited(timestamp, activeTxns); isAlreadyEdited {
 				return nil, error
 			}
 
@@ -161,7 +158,7 @@ func (tree *BinTree) getMinimum(currNode *node) *node {
 	return currNode
 }
 
-func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]bool) (*Record, error) {
+func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
 	delNode := tree.Search(tree.root, key)
 	if delNode != nil {
 		delNode.data.Lock()
@@ -170,7 +167,7 @@ func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]
 		recordLen := len(delNode.data.records)
 		delRecord := &delNode.data.records[recordLen-1]
 
-		if isAlreadyEdited, error := delRecord.isConcurrentEdited(timestamp, activeTxns); isAlreadyEdited {
+		if isAlreadyEdited, error := delRecord.IsConcurrentEdited(timestamp, activeTxns); isAlreadyEdited {
 			return nil, error
 		}
 
@@ -182,7 +179,7 @@ func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]
 }
 
 // Expire with active txns ignored (used for replaying log)
-func (tree *BinTree) ExpireReplay(key string, timestamp uint64) (*Record, error) {
+func (tree *BinTree) ExpireReplay(key string, timestamp uint64) (*record.Record, error) {
 	delNode := tree.Search(tree.root, key)
 	if delNode != nil {
 		recordLen := len(delNode.data.records)
@@ -282,47 +279,6 @@ func (tree *BinTree) Sorted() bool {
 	return true
 }
 
-func (currRecord *Record) isVisible(txnID uint64, activeTxns map[uint64]bool) bool {
-	// We can't view a record if its been aborted
-	if currRecord.Status == Aborted {
-		return false
-	}
-
-	// We can't view results from transactions that started before us
-	if currRecord.CreatedBy > txnID {
-		return false
-	}
-	// We can't view a record if it's in an active transaction that isn't our own
-	if activeTxns[currRecord.CreatedBy] && currRecord.CreatedBy != txnID {
-		return false
-	}
-	// We can't view a record if
-	// - it's expired and not active
-	// - it's expired and the transaction iD is our own
-	if currRecord.ExpiredBy != 0 && (!activeTxns[currRecord.ExpiredBy] || currRecord.ExpiredBy == txnID) {
-		return false
-	}
-	return true
-}
-
-func (lastRecord *Record) isConcurrentEdited(txnID uint64, activeTxns map[uint64]bool) (bool, error) {
-	// Catches all committed and noncommitted future transaction writes
-	if lastRecord.CreatedBy > txnID {
-		return true, errors.New("A later transaction wrote/is writing to this key")
-	} else if activeTxns[lastRecord.CreatedBy] && lastRecord.CreatedBy != txnID {
-		// Catches all uncommitted previous transaction writes
-		return true, errors.New("An active transaction wrote to this key")
-	}
-
-	if lastRecord.ExpiredBy > txnID {
-		return true, errors.New("A later transaction deleted/is deleting this key")
-	} else if activeTxns[lastRecord.ExpiredBy] && lastRecord.ExpiredBy != txnID {
-		return true, errors.New("An active transaction is deleting this key")
-	}
-
-	return false, nil
-}
-
 func (tree *BinTree) RecordListPrint(key string) string {
 	nodeToPrint := tree.Search(tree.root, key)
 	var sb strings.Builder
@@ -354,10 +310,10 @@ func (tree *BinTree) RecordListPrint(key string) string {
 	return sb.String()
 }
 
-func (tree *BinTree) SetReplay(key string, value string, timestamp uint64) (*Record, error) {
+func (tree *BinTree) SetReplay(key string, value string, timestamp uint64) (*record.Record, error) {
 
-	var newRecord = Record{Value: value, CreatedBy: timestamp, ExpiredBy: 0}
-	var singleRecordList = recordList{key: key, records: []Record{newRecord}}
+	var newRecord = record.NewRecord(value, timestamp)
+	var singleRecordList = recordList{key: key, records: []record.Record{newRecord}}
 
 	insertedRecord, err := tree.insertReplay(key, singleRecordList, timestamp)
 	if err != nil {
@@ -366,10 +322,10 @@ func (tree *BinTree) SetReplay(key string, value string, timestamp uint64) (*Rec
 	return insertedRecord, nil
 }
 
-func (tree *BinTree) insertReplay(key string, singleRecordList recordList, timestamp uint64) (*Record, error) {
+func (tree *BinTree) insertReplay(key string, singleRecordList recordList, timestamp uint64) (*record.Record, error) {
 	newNode := node{}
 	newNode.data = singleRecordList
-	var insertedRecord *Record
+	var insertedRecord *record.Record
 
 	if tree.root == nil {
 		tree.root = &newNode
@@ -385,7 +341,7 @@ func (tree *BinTree) insertReplay(key string, singleRecordList recordList, times
 	return insertedRecord, nil
 }
 
-func (tree *BinTree) iterativeInsertReplay(root *node, newNode *node, timestamp uint64) (*Record, error) {
+func (tree *BinTree) iterativeInsertReplay(root *node, newNode *node, timestamp uint64) (*record.Record, error) {
 	for {
 		if newNode.data.key < root.data.key {
 			if root.left == nil {

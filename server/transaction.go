@@ -2,6 +2,7 @@ package main
 
 import (
 	"OttoDB/server/store/binTree"
+	"OttoDB/server/store/record"
 	fmt "fmt"
 	"strconv"
 	"strings"
@@ -10,8 +11,8 @@ import (
 
 type Transaction struct {
 	timestamp       uint64
-	insertedRecords []*binTree.Record
-	deletedRecords  []*binTree.Record
+	insertedRecords []*record.Record
+	deletedRecords  []*record.Record
 	replayOps       []Operation
 }
 
@@ -25,20 +26,20 @@ func NewTransactionMap() *TransactionMap {
 }
 
 func NewTransaction(timestamp uint64) Transaction {
-	return Transaction{timestamp: timestamp, insertedRecords: make([]*binTree.Record, 0), deletedRecords: make([]*binTree.Record, 0)}
+	return Transaction{timestamp: timestamp, insertedRecords: make([]*record.Record, 0), deletedRecords: make([]*record.Record, 0)}
 }
 
 func (txn *Transaction) Abort() {
 	// reset all expiration dates to old ones
-	for _, record := range txn.deletedRecords {
-		record.ExpiredBy = record.OldExpiredBy
+	for _, rcrd := range txn.deletedRecords {
+		rcrd.ExpiredBy = rcrd.OldExpiredBy
 	}
 
 	fmt.Printf("Inserted record size: %d", len(txn.insertedRecords))
 
 	// set inserted nodes as aborted
-	for _, record := range txn.insertedRecords {
-		record.Status = binTree.Aborted
+	for _, rcrd := range txn.insertedRecords {
+		rcrd.Status = record.Aborted
 	}
 }
 
