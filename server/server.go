@@ -102,7 +102,7 @@ func main() {
 				expiredRecord, err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
 				if err != nil {
 					oplog.WriteAbortToLog(txID)
-					txn.Abort()
+					tree.Abort(txn)
 					removeTxnData(txID, activeTransactions)
 					removeClientData(client, transactionManager)
 					conn.WriteError("Txn Aborted On Expiration: " + err.Error())
@@ -110,7 +110,7 @@ func main() {
 				}
 
 				if expiredRecord != nil {
-					txn.DeletedRecords = append(txn.DeletedRecords)
+					txn.DeletedRecords = append(txn.DeletedRecords, expiredRecord)
 				}
 
 				insertedRecord, err := tree.Set(string(cmd.Args[1]), string(cmd.Args[2]), txID, activeTxdSnapshot)
@@ -152,7 +152,7 @@ func main() {
 				expiredRecord, err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
 				if err != nil {
 					oplog.WriteAbortToLog(txID)
-					txn.Abort()
+					tree.Abort(txn)
 					removeTxnData(txID, activeTransactions)
 					removeClientData(client, transactionManager)
 					conn.WriteError("Txn Aborted: " + err.Error())
@@ -207,7 +207,7 @@ func main() {
 			case "abort":
 				oplog.WriteAbortToLog(txID)
 				// Abort the txn
-				txn.Abort()
+				tree.Abort(txn)
 
 				// Remove txn from active txns and client mapping txns
 				removeTxnData(txID, activeTransactions)

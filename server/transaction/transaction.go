@@ -3,7 +3,6 @@ package transaction
 import (
 	"OttoDB/server/oplog/logprotobuf"
 	"OttoDB/server/store/record"
-	fmt "fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,20 +34,6 @@ func (txnMap *TransactionMap) AddRWAntiDepFlags(outTxn uint64, inTxn uint64) err
 
 func NewTransaction(timestamp uint64) *Transaction {
 	return &Transaction{Timestamp: timestamp, InsertedRecords: make([]*record.Record, 0), DeletedRecords: make([]*record.Record, 0)}
-}
-
-func (txn *Transaction) Abort() {
-	// reset all expiration dates to old ones
-	for _, delRcrd := range txn.DeletedRecords {
-		delRcrd.ExpiredBy = delRcrd.OldExpiredBy
-	}
-
-	fmt.Printf("Inserted record size: %d", len(txn.InsertedRecords))
-
-	// set inserted nodes as aborted
-	for _, rcrd := range txn.InsertedRecords {
-		rcrd.Status = record.Aborted
-	}
 }
 
 func (txn *Transaction) String() string {

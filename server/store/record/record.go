@@ -13,6 +13,7 @@ const (
 )
 
 type Record struct {
+	Key          string
 	Value        string
 	CreatedBy    uint64
 	ExpiredBy    uint64
@@ -20,8 +21,8 @@ type Record struct {
 	Status       txnStatus
 }
 
-func NewRecord(value string, createdBy uint64) Record {
-	return Record{Value: value, CreatedBy: createdBy}
+func NewRecord(key string, value string, createdBy uint64) Record {
+	return Record{Key: key, Value: value, CreatedBy: createdBy}
 }
 
 func (currRecord *Record) IsVisible(txnID uint64, activeTxns map[uint64]bool) (visibility bool, rwAntiDep bool) {

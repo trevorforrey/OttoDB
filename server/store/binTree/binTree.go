@@ -79,7 +79,7 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 
 func (tree *BinTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
 
-	var newRecord = record.NewRecord(value, timestamp)
+	var newRecord = record.NewRecord(key, value, timestamp)
 	var singleRecordList = recordList{key: key, Records: []record.Record{newRecord}}
 
 	insertedRecord, err := tree.insert(key, singleRecordList, timestamp, activeTxns)
@@ -321,7 +321,7 @@ func (tree *BinTree) RecordListPrint(key string) string {
 
 func (tree *BinTree) SetReplay(key string, value string, timestamp uint64) (*record.Record, error) {
 
-	var newRecord = record.NewRecord(value, timestamp)
+	var newRecord = record.NewRecord(key, value, timestamp)
 	var singleRecordList = recordList{key: key, Records: []record.Record{newRecord}}
 
 	insertedRecord, err := tree.insertReplay(key, singleRecordList, timestamp)
@@ -372,4 +372,66 @@ func (tree *BinTree) iterativeInsertReplay(root *node, newNode *node, timestamp 
 			return &newNode.Data.Records[0], nil
 		}
 	}
+}
+
+func (tree *BinTree) Abort(txn *transaction.Transaction) error {
+	err := tree.resetInsertedRecords(txn.Timestamp, txn.InsertedRecords)
+	if err != nil {
+		return err
+	}
+	err = tree.resetDeletedRecords(txn.Timestamp, txn.DeletedRecords)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (tree *BinTree) resetInsertedRecords(timestamp uint64, insertedRecords []*record.Record) error {
+	for _, insertedRecord := range insertedRecords {
+		err := tree.resetInsertedRecord(timestamp, insertedRecord)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (tree *BinTree) resetInsertedRecord(timestamp uint64, insertedRecord *record.Record) error {
+	node := tree.Search(tree.Root, insertedRecord.Key)
+	if len(node.Data.Records) == 0 {
+		return errors.New("No record found for aborting inserted record")
+	}
+	node.Data.Lock()
+	defer node.Data.Unlock()
+	for index, rec := range node.Data.Records {
+		if rec.CreatedBy == timestamp {
+			node.Data.Records[index].Status = record.Aborted
+		}
+	}
+	return nil
+}
+
+func (tree *BinTree) resetDeletedRecords(timestamp uint64, deletedRecords []*record.Record) error {
+	for _, deletedRecord := range deletedRecords {
+		err := tree.resetDeletedRecord(timestamp, deletedRecord)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (tree *BinTree) resetDeletedRecord(timestamp uint64, deletedRecord *record.Record) error {
+	node := tree.Search(tree.Root, deletedRecord.Key)
+	if len(node.Data.Records) == 0 {
+		return errors.New("No records to delete")
+	}
+	node.Data.Lock()
+	defer node.Data.Unlock()
+	for index, rec := range node.Data.Records {
+		if rec.ExpiredBy == timestamp {
+			node.Data.Records[index].ExpiredBy = node.Data.Records[index].OldExpiredBy
+		}
+	}
+	return nil
 }
