@@ -14,25 +14,33 @@ type Transaction struct {
 	InsertedRecords []*record.Record
 	DeletedRecords  []*record.Record
 	ReplayOps       []logprotobuf.Operation
+	RWAntiDepIn     int8
+	RWAntiDepOut    int8
 }
 
 type TransactionMap struct {
 	sync.RWMutex
-	Transactions map[uint64]Transaction
+	Transactions map[uint64]*Transaction
 }
 
 func NewTransactionMap() *TransactionMap {
-	return &TransactionMap{Transactions: make(map[uint64]Transaction)}
+	return &TransactionMap{Transactions: make(map[uint64]*Transaction)}
 }
 
-func NewTransaction(timestamp uint64) Transaction {
-	return Transaction{Timestamp: timestamp, InsertedRecords: make([]*record.Record, 0), DeletedRecords: make([]*record.Record, 0)}
+func (txnMap *TransactionMap) AddRWAntiDepFlags(outTxn uint64, inTxn uint64) error {
+	txnMap.Transactions[outTxn].RWAntiDepOut = 1
+	txnMap.Transactions[inTxn].RWAntiDepIn = 1
+	return nil
+}
+
+func NewTransaction(timestamp uint64) *Transaction {
+	return &Transaction{Timestamp: timestamp, InsertedRecords: make([]*record.Record, 0), DeletedRecords: make([]*record.Record, 0)}
 }
 
 func (txn *Transaction) Abort() {
 	// reset all expiration dates to old ones
-	for _, rcrd := range txn.DeletedRecords {
-		rcrd.ExpiredBy = rcrd.OldExpiredBy
+	for _, delRcrd := range txn.DeletedRecords {
+		delRcrd.ExpiredBy = delRcrd.OldExpiredBy
 	}
 
 	fmt.Printf("Inserted record size: %d", len(txn.InsertedRecords))
@@ -45,6 +53,21 @@ func (txn *Transaction) Abort() {
 
 func (txn *Transaction) String() string {
 	var sb strings.Builder
+
+	sb.WriteString("Txn: ")
+	sb.WriteString(strconv.Itoa(int(txn.Timestamp)))
+	sb.WriteString("   |")
+	sb.WriteString("\n")
+
+	sb.WriteString("RW Anti Deps: ")
+	sb.WriteString("in: ")
+	sb.WriteString(strconv.Itoa(int(txn.RWAntiDepIn)))
+	sb.WriteString("   |")
+	sb.WriteString("out: ")
+	sb.WriteString(strconv.Itoa(int(txn.RWAntiDepOut)))
+	sb.WriteString("   |")
+	sb.WriteString("\n")
+
 	expiredRecords := txn.DeletedRecords
 	sb.WriteString("deleted records     ")
 	for _, record := range expiredRecords {

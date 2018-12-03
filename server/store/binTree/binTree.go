@@ -2,6 +2,7 @@ package binTree
 
 import (
 	"OttoDB/server/store/record"
+	"OttoDB/server/transaction"
 	"errors"
 	"fmt"
 	"strconv"
@@ -20,11 +21,11 @@ const (
 type recordList struct {
 	sync.RWMutex
 	key     string
-	records []record.Record
+	Records []record.Record
 }
 
 type node struct {
-	data   recordList
+	Data   recordList
 	left   *node
 	right  *node
 	parent *node
@@ -32,7 +33,7 @@ type node struct {
 
 type BinTree struct {
 	sync.RWMutex
-	root *node
+	Root *node
 }
 
 func NewTree() *BinTree {
@@ -40,27 +41,31 @@ func NewTree() *BinTree {
 	return &tree
 }
 
-func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]bool) (string, error) {
+func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]bool, txnMap *transaction.TransactionMap) (string, error) {
 	fmt.Printf("About to start tree search on %s\n", key)
-	getNode := tree.Search(tree.root, key)
+	getNode := tree.Search(tree.Root, key)
 	if getNode == nil {
 		return "", errors.New("No value found")
 	}
 
-	recordList := getNode.data.records
-	fmt.Printf("Found key: %s\n", getNode.data.key)
+	recordList := getNode.Data.Records
+	fmt.Printf("Found key: %s\n", getNode.Data.key)
 
 	// Find value scoped in current timestamp that's committed
 	var returnValue string
-	var nonVisibleRecords []uint64
 	for i := len(recordList) - 1; i >= 0; i-- {
 		currRecord := recordList[i]
-		if currRecord.IsVisible(timestamp, activeTxns) {
+		if isVisible, isRWAntiDep := currRecord.IsVisible(timestamp, activeTxns); isVisible {
 			returnValue = currRecord.Value
+			// if reading an active delete (RW-AntiDep)
+			if isRWAntiDep {
+				fmt.Printf("(expired) RW Dep out: %d", currRecord.ExpiredBy)
+				txnMap.AddRWAntiDepFlags(timestamp, currRecord.ExpiredBy)
+			}
 			break
-		} else {
-			// Won't work all the time, could be the case where it's deleted, but doesn't cause a rw antidep
-			nonVisibleRecords = append(nonVisibleRecords, currRecord.CreatedBy)
+		} else if isRWAntiDep {
+			fmt.Printf("(write) RW Dep out: %d", currRecord.CreatedBy)
+			txnMap.AddRWAntiDepFlags(timestamp, currRecord.CreatedBy)
 		}
 	}
 
@@ -75,7 +80,7 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 func (tree *BinTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
 
 	var newRecord = record.NewRecord(value, timestamp)
-	var singleRecordList = recordList{key: key, records: []record.Record{newRecord}}
+	var singleRecordList = recordList{key: key, Records: []record.Record{newRecord}}
 
 	insertedRecord, err := tree.insert(key, singleRecordList, timestamp, activeTxns)
 	if err != nil {
@@ -85,10 +90,10 @@ func (tree *BinTree) Set(key string, value string, timestamp uint64, activeTxns 
 }
 
 func (tree *BinTree) Search(root *node, key string) *node {
-	if root == nil || key == root.data.key {
+	if root == nil || key == root.Data.key {
 		return root
 	}
-	if key < tree.root.data.key {
+	if key < root.Data.key {
 		fmt.Println("key is less than root key")
 		return tree.Search(root.left, key)
 	} else {
@@ -99,16 +104,16 @@ func (tree *BinTree) Search(root *node, key string) *node {
 
 func (tree *BinTree) insert(key string, singleRecordList recordList, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
 	newNode := node{}
-	newNode.data = singleRecordList
+	newNode.Data = singleRecordList
 	var insertedRecord *record.Record
 
-	if tree.root == nil {
-		tree.root = &newNode
-		insertedRecord = &newNode.data.records[0]
+	if tree.Root == nil {
+		tree.Root = &newNode
+		insertedRecord = &tree.Root.Data.Records[0]
 	} else {
 		fmt.Println("calling to insert node")
 		var err error
-		insertedRecord, err = tree.iterativeInsert(tree.root, &newNode, timestamp, activeTxns)
+		insertedRecord, err = tree.iterativeInsert(tree.Root, &newNode, timestamp, activeTxns)
 		if err != nil {
 			return nil, err
 		}
@@ -118,35 +123,39 @@ func (tree *BinTree) insert(key string, singleRecordList recordList, timestamp u
 
 func (tree *BinTree) iterativeInsert(root *node, newNode *node, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
 	for {
-		if newNode.data.key < root.data.key {
+		if newNode.Data.key < root.Data.key {
 			if root.left == nil {
 				root.left = newNode
-				return &newNode.data.records[0], nil
+				return &root.left.Data.Records[0], nil
 			}
 			root = root.left
 
-		} else if newNode.data.key > root.data.key {
+		} else if newNode.Data.key > root.Data.key {
 			if root.right == nil {
 				root.right = newNode
-				return &newNode.data.records[0], nil
+				return &root.right.Data.Records[0], nil
 			}
 			root = root.right
 
 		} else {
 			// Adding a version to an existing key
-			root.data.Lock()
-			defer root.data.Unlock()
+			root.Data.Lock()
+			defer root.Data.Unlock()
 
 			// Check for concurrent write
-			lastRecord := root.data.records[len(root.data.records)-1]
+			lastRecord := root.Data.Records[len(root.Data.Records)-1]
 
 			if isAlreadyEdited, error := lastRecord.IsConcurrentEdited(timestamp, activeTxns); isAlreadyEdited {
 				return nil, error
 			}
 
-			root.data.records = append(root.data.records, newNode.data.records[0])
-			fmt.Println("new node inserted")
-			return &root.data.records[len(root.data.records)-1], nil
+			fmt.Printf("\n%p", &root.Data.Records[0])
+			fmt.Printf("Capacity of record list is: %d", cap(root.Data.Records))
+			root.Data.Records = append(root.Data.Records, newNode.Data.Records[0]) // The culprit
+			fmt.Printf("\n%p", &root.Data.Records[0])
+			fmt.Printf("\n%p", &root.Data.Records[1])
+			fmt.Println("new version inserted")
+			return &root.Data.Records[len(root.Data.Records)-1], nil
 		}
 	}
 }
@@ -159,13 +168,13 @@ func (tree *BinTree) getMinimum(currNode *node) *node {
 }
 
 func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
-	delNode := tree.Search(tree.root, key)
+	delNode := tree.Search(tree.Root, key)
 	if delNode != nil {
-		delNode.data.Lock()
-		defer delNode.data.Unlock()
+		delNode.Data.Lock()
+		defer delNode.Data.Unlock()
 
-		recordLen := len(delNode.data.records)
-		delRecord := &delNode.data.records[recordLen-1]
+		recordLen := len(delNode.Data.Records)
+		delRecord := &delNode.Data.Records[recordLen-1]
 
 		if isAlreadyEdited, error := delRecord.IsConcurrentEdited(timestamp, activeTxns); isAlreadyEdited {
 			return nil, error
@@ -173,37 +182,37 @@ func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]
 
 		delRecord.OldExpiredBy = delRecord.ExpiredBy
 		delRecord.ExpiredBy = timestamp
-		return &delNode.data.records[recordLen-1], nil
+		return &delNode.Data.Records[recordLen-1], nil
 	}
 	return nil, nil
 }
 
 // Expire with active txns ignored (used for replaying log)
 func (tree *BinTree) ExpireReplay(key string, timestamp uint64) (*record.Record, error) {
-	delNode := tree.Search(tree.root, key)
+	delNode := tree.Search(tree.Root, key)
 	if delNode != nil {
-		recordLen := len(delNode.data.records)
-		delRecord := &delNode.data.records[recordLen-1]
+		recordLen := len(delNode.Data.Records)
+		delRecord := &delNode.Data.Records[recordLen-1]
 
 		delRecord.OldExpiredBy = delRecord.ExpiredBy
 		delRecord.ExpiredBy = timestamp
-		return &delNode.data.records[recordLen-1], nil
+		return &delNode.Data.Records[recordLen-1], nil
 	}
 	return nil, nil
 }
 
 func (tree *BinTree) BreadthFirstTraversal() {
-	if tree.root == nil {
+	if tree.Root == nil {
 		return
 	}
 	nodes := make([]node, 1)
-	nodes[0] = *tree.root
+	nodes[0] = *tree.Root
 	for len(nodes) != 0 {
 		currentNode := nodes[0]
-		if currentNode.data.key == (*tree).root.data.key {
-			fmt.Printf("%s \n", currentNode.data.key)
+		if currentNode.Data.key == (*tree).Root.Data.key {
+			fmt.Printf("%s \n", currentNode.Data.key)
 		} else {
-			fmt.Printf("%s -> %s\n", currentNode.parent.data.key, currentNode.data.key)
+			fmt.Printf("%s -> %s\n", currentNode.parent.Data.key, currentNode.Data.key)
 		}
 		// Remove current element from the slice
 		nodes = append(nodes[:0], nodes[1:]...)
@@ -219,7 +228,7 @@ func (tree *BinTree) BreadthFirstTraversal() {
 }
 
 func (tree *BinTree) InOrderTraversal() {
-	tree.inOrderTraversal(tree.root)
+	tree.inOrderTraversal(tree.Root)
 }
 
 func (tree *BinTree) inOrderTraversal(currNode *node) {
@@ -227,7 +236,7 @@ func (tree *BinTree) inOrderTraversal(currNode *node) {
 		return
 	}
 	tree.inOrderTraversal(currNode.left)
-	fmt.Printf("%s: \n", currNode.data.key)
+	fmt.Printf("%s: \n", currNode.Data.key)
 	tree.inOrderTraversal(currNode.right)
 }
 
@@ -239,7 +248,7 @@ func (tree *BinTree) Sorted() bool {
 		upperBound string
 	}
 	startingNode := boundedNode{}
-	startingNode.node = *(tree.root)
+	startingNode.node = *(tree.Root)
 	nodes := make([]boundedNode, 1)
 	nodes = append(nodes, startingNode)
 	for len(nodes) != 0 {
@@ -247,12 +256,12 @@ func (tree *BinTree) Sorted() bool {
 		// Pop from nodes stack
 		nodeAndBound, nodes = nodes[0], nodes[1:]
 		currNode := nodeAndBound.node
-		currNodeKey := currNode.data.key
+		currNodeKey := currNode.Data.key
 		lowerBound := nodeAndBound.lowerBound
 		upperBound := nodeAndBound.upperBound
 
 		// Check to see if key is in the proper upper / lower bound
-		if (currNodeKey <= lowerBound || currNodeKey >= upperBound) && (currNode.data.key != "" && upperBound != "" && lowerBound != "") {
+		if (currNodeKey <= lowerBound || currNodeKey >= upperBound) && (currNode.Data.key != "" && upperBound != "" && lowerBound != "") {
 			fmt.Printf("Key is %s. Lower bound is %s. Upper Bound is %s\n", currNodeKey, lowerBound, upperBound)
 			return false
 		} else {
@@ -280,9 +289,9 @@ func (tree *BinTree) Sorted() bool {
 }
 
 func (tree *BinTree) RecordListPrint(key string) string {
-	nodeToPrint := tree.Search(tree.root, key)
+	nodeToPrint := tree.Search(tree.Root, key)
 	var sb strings.Builder
-	recordList := nodeToPrint.data.records
+	recordList := nodeToPrint.Data.Records
 	for index, record := range recordList {
 		sb.WriteString("index: ")
 		fmt.Printf("index: %d", index)
@@ -313,7 +322,7 @@ func (tree *BinTree) RecordListPrint(key string) string {
 func (tree *BinTree) SetReplay(key string, value string, timestamp uint64) (*record.Record, error) {
 
 	var newRecord = record.NewRecord(value, timestamp)
-	var singleRecordList = recordList{key: key, records: []record.Record{newRecord}}
+	var singleRecordList = recordList{key: key, Records: []record.Record{newRecord}}
 
 	insertedRecord, err := tree.insertReplay(key, singleRecordList, timestamp)
 	if err != nil {
@@ -324,16 +333,16 @@ func (tree *BinTree) SetReplay(key string, value string, timestamp uint64) (*rec
 
 func (tree *BinTree) insertReplay(key string, singleRecordList recordList, timestamp uint64) (*record.Record, error) {
 	newNode := node{}
-	newNode.data = singleRecordList
+	newNode.Data = singleRecordList
 	var insertedRecord *record.Record
 
-	if tree.root == nil {
-		tree.root = &newNode
-		insertedRecord = &newNode.data.records[0]
+	if tree.Root == nil {
+		tree.Root = &newNode
+		insertedRecord = &newNode.Data.Records[0]
 	} else {
 		fmt.Println("calling to insert node")
 		var err error
-		insertedRecord, err = tree.iterativeInsertReplay(tree.root, &newNode, timestamp)
+		insertedRecord, err = tree.iterativeInsertReplay(tree.Root, &newNode, timestamp)
 		if err != nil {
 			return nil, err
 		}
@@ -343,24 +352,24 @@ func (tree *BinTree) insertReplay(key string, singleRecordList recordList, times
 
 func (tree *BinTree) iterativeInsertReplay(root *node, newNode *node, timestamp uint64) (*record.Record, error) {
 	for {
-		if newNode.data.key < root.data.key {
+		if newNode.Data.key < root.Data.key {
 			if root.left == nil {
 				root.left = newNode
-				return &newNode.data.records[0], nil
+				return &newNode.Data.Records[0], nil
 			}
 			root = root.left
 
-		} else if newNode.data.key > root.data.key {
+		} else if newNode.Data.key > root.Data.key {
 			if root.right == nil {
 				root.right = newNode
-				return &newNode.data.records[0], nil
+				return &newNode.Data.Records[0], nil
 			}
 			root = root.right
 
 		} else {
-			root.data.records = append(root.data.records, newNode.data.records[0])
+			root.Data.Records = append(root.Data.Records, newNode.Data.Records[0])
 			fmt.Println("new node inserted")
-			return &newNode.data.records[0], nil
+			return &newNode.Data.Records[0], nil
 		}
 	}
 }

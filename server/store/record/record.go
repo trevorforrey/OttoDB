@@ -24,27 +24,35 @@ func NewRecord(value string, createdBy uint64) Record {
 	return Record{Value: value, CreatedBy: createdBy}
 }
 
-func (currRecord *Record) IsVisible(txnID uint64, activeTxns map[uint64]bool) bool {
+func (currRecord *Record) IsVisible(txnID uint64, activeTxns map[uint64]bool) (visibility bool, rwAntiDep bool) {
 	// We can't view a record if its been aborted
 	if currRecord.Status == Aborted {
-		return false
+		return false, false
 	}
 
-	// We can't view results from transactions that started before us
+	// We can't view results from transactions that started after us
 	if currRecord.CreatedBy > txnID {
-		return false
+		return false, true
 	}
 	// We can't view a record if it's in an active transaction that isn't our own
 	if activeTxns[currRecord.CreatedBy] && currRecord.CreatedBy != txnID {
-		return false
+		return false, true
 	}
+
 	// We can't view a record if
 	// - it's expired and not active
 	// - it's expired and the transaction iD is our own
-	if currRecord.ExpiredBy != 0 && (!activeTxns[currRecord.ExpiredBy] || currRecord.ExpiredBy == txnID) {
-		return false
+	if currRecord.ExpiredBy != 0 {
+		if !activeTxns[currRecord.ExpiredBy] {
+			return false, false
+		}
+		if currRecord.ExpiredBy == txnID {
+			return false, false
+		}
+		// If expiring transaction is active and not our own, we can read, but a rw-antidep is formed
+		return true, true
 	}
-	return true
+	return true, false
 }
 
 func (lastRecord *Record) IsConcurrentEdited(txnID uint64, activeTxns map[uint64]bool) (bool, error) {

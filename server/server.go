@@ -49,7 +49,7 @@ func main() {
 			txID, inTransaction := transactionManager.Transactions[client]
 			transactionManager.RUnlock()
 
-			var txn transaction.Transaction
+			var txn *transaction.Transaction
 			var singleRunTxn bool
 			if !inTransaction {
 				// Give new transaction a new transaction id
@@ -105,22 +105,15 @@ func main() {
 					txn.Abort()
 					removeTxnData(txID, activeTransactions)
 					removeClientData(client, transactionManager)
-					conn.WriteError("Txn Aborted: " + err.Error())
+					conn.WriteError("Txn Aborted On Expiration: " + err.Error())
 					return
 				}
+
 				if expiredRecord != nil {
-					txn.DeletedRecords = append(txn.DeletedRecords, expiredRecord)
+					txn.DeletedRecords = append(txn.DeletedRecords)
 				}
 
 				insertedRecord, err := tree.Set(string(cmd.Args[1]), string(cmd.Args[2]), txID, activeTxdSnapshot)
-				if err != nil {
-					oplog.WriteAbortToLog(txID)
-					txn.Abort()
-					removeTxnData(txID, activeTransactions)
-					removeClientData(client, transactionManager)
-					conn.WriteError("Txn Aborted: " + err.Error())
-					return
-				}
 				txn.InsertedRecords = append(txn.InsertedRecords, insertedRecord)
 
 				if singleRunTxn {
@@ -139,7 +132,7 @@ func main() {
 					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 					return
 				}
-				keyVal, err := tree.Get(string(cmd.Args[1]), txID, activeTxdSnapshot)
+				keyVal, err := tree.Get(string(cmd.Args[1]), txID, activeTxdSnapshot, transactionMap)
 				if err != nil {
 					fmt.Print(err)
 					conn.WriteNull()

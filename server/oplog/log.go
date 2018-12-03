@@ -129,7 +129,7 @@ func ReplayLog(tree *binTree.BinTree) (uint64, error) {
 		}
 
 		// Get transaction, and determine if one already exists for the txID
-		var txn transaction.Transaction
+		var txn *transaction.Transaction
 		txn, inTransaction := transactionMap.Transactions[operation.TxID]
 		if !inTransaction {
 			txn = transaction.NewTransaction(operation.TxID)
@@ -151,7 +151,7 @@ func ReplayLog(tree *binTree.BinTree) (uint64, error) {
 	for _, transactionID := range transactions {
 		fmt.Printf("About to batch perform txn: %d", transactionID)
 		txn := transactionMap.Transactions[transactionID]
-		err := BatchExecute(&txn, tree)
+		err := BatchExecute(txn, tree)
 		if err != nil {
 			return 0, err
 		}
