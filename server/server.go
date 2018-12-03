@@ -134,6 +134,14 @@ func main() {
 				}
 				keyVal, err := tree.Get(string(cmd.Args[1]), txID, activeTxdSnapshot, transactionMap)
 				if err != nil {
+					if err.Error() == "Txn breaks Serializability" {
+						oplog.WriteAbortToLog(txID)
+						tree.Abort(txn)
+						removeTxnData(txID, activeTransactions)
+						removeClientData(client, transactionManager)
+						conn.WriteError("Txn Aborted: " + err.Error())
+						return
+					}
 					fmt.Print(err)
 					conn.WriteNull()
 					return

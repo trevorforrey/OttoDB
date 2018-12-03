@@ -164,7 +164,7 @@ func Execute(tree *binTree.BinTree, txn *transaction.Transaction, operation logp
 	case "set":
 		expiredRecord, err := tree.ExpireReplay(operation.Key, operation.TxID)
 		if err != nil {
-			txn.Abort()
+			tree.Abort(txn)
 			return fmt.Errorf("Ran into an error whil expiring key: %s on txn: %d", operation.Key, operation.TxID)
 		}
 		if expiredRecord != nil {
@@ -182,7 +182,7 @@ func Execute(tree *binTree.BinTree, txn *transaction.Transaction, operation logp
 	case "del":
 		expiredRecord, err := tree.ExpireReplay(operation.Key, operation.TxID)
 		if err != nil {
-			txn.Abort()
+			tree.Abort(txn)
 			return fmt.Errorf("Ran into an error whil expiring key: %s on txn: %d", operation.Key, operation.TxID)
 		}
 		txn.DeletedRecords = append(txn.DeletedRecords, expiredRecord)

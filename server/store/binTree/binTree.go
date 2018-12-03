@@ -58,14 +58,24 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 		if isVisible, isRWAntiDep := currRecord.IsVisible(timestamp, activeTxns); isVisible {
 			returnValue = currRecord.Value
 			// if reading an active delete (RW-AntiDep)
-			if isRWAntiDep {
+			if isRWAntiDep && txnMap.Transactions[timestamp] != nil {
 				fmt.Printf("(expired) RW Dep out: %d", currRecord.ExpiredBy)
-				txnMap.AddRWAntiDepFlags(timestamp, currRecord.ExpiredBy)
+				txnMap.Lock()
+				err := txnMap.AddRWAntiDepFlags(timestamp, currRecord.ExpiredBy)
+				txnMap.Unlock()
+				if err != nil {
+					return "", err
+				}
 			}
 			break
-		} else if isRWAntiDep {
+		} else if isRWAntiDep && txnMap.Transactions[timestamp] != nil {
 			fmt.Printf("(write) RW Dep out: %d", currRecord.CreatedBy)
-			txnMap.AddRWAntiDepFlags(timestamp, currRecord.CreatedBy)
+			txnMap.Lock()
+			err := txnMap.AddRWAntiDepFlags(timestamp, currRecord.CreatedBy)
+			txnMap.Unlock()
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 

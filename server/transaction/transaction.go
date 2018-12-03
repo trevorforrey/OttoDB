@@ -3,6 +3,7 @@ package transaction
 import (
 	"OttoDB/server/oplog/logprotobuf"
 	"OttoDB/server/store/record"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,9 @@ func NewTransactionMap() *TransactionMap {
 }
 
 func (txnMap *TransactionMap) AddRWAntiDepFlags(outTxn uint64, inTxn uint64) error {
+	if txnMap.Transactions[outTxn].RWAntiDepIn == 1 {
+		return errors.New("Txn breaks Serializability")
+	}
 	txnMap.Transactions[outTxn].RWAntiDepOut = 1
 	txnMap.Transactions[inTxn].RWAntiDepIn = 1
 	return nil
@@ -34,6 +38,10 @@ func (txnMap *TransactionMap) AddRWAntiDepFlags(outTxn uint64, inTxn uint64) err
 
 func NewTransaction(timestamp uint64) *Transaction {
 	return &Transaction{Timestamp: timestamp, InsertedRecords: make([]*record.Record, 0), DeletedRecords: make([]*record.Record, 0)}
+}
+
+func (txn *Transaction) IsBadStructure() bool {
+	return txn.RWAntiDepIn > 0 && txn.RWAntiDepOut > 0
 }
 
 func (txn *Transaction) String() string {
