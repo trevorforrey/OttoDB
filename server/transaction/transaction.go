@@ -27,8 +27,17 @@ func NewTransactionMap() *TransactionMap {
 	return &TransactionMap{Transactions: make(map[uint64]*Transaction)}
 }
 
-func (txnMap *TransactionMap) AddRWAntiDepFlags(outTxn uint64, inTxn uint64) error {
+func (txnMap *TransactionMap) AddRWAntiDepFlagOut(outTxn uint64, inTxn uint64) error {
 	if txnMap.Transactions[outTxn].RWAntiDepIn == 1 {
+		return errors.New("Txn breaks Serializability")
+	}
+	txnMap.Transactions[outTxn].RWAntiDepOut = 1
+	txnMap.Transactions[inTxn].RWAntiDepIn = 1
+	return nil
+}
+
+func (txnMap *TransactionMap) AddRWAntiDepFlagIn(outTxn uint64, inTxn uint64) error {
+	if txnMap.Transactions[inTxn].RWAntiDepOut == 1 {
 		return errors.New("Txn breaks Serializability")
 	}
 	txnMap.Transactions[outTxn].RWAntiDepOut = 1

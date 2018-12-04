@@ -3,6 +3,8 @@ package main
 import (
 	"OttoDB/server/oplog"
 	"OttoDB/server/oplog/logprotobuf"
+	"OttoDB/server/ssi"
+	"OttoDB/server/ssi/ssiLockTable"
 	"OttoDB/server/store/binTree"
 	"OttoDB/server/transaction"
 	"OttoDB/server/transactionManagers"
@@ -27,10 +29,16 @@ var (
 	transactionManager = transactionManagers.NewClientMap()
 	activeTransactions = transactionManagers.NewActiveTxnMap()
 	transactionMap     = transaction.NewTransactionMap()
+	siReadLockTable    = ssiLockTable.NewSIReadKeyLockTable()
 )
 
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
+	newTxnChan := make(chan uint64)
+	endingTxnChan := make(chan uint64)
+
+	go ssi.ManageSSITable(siReadLockTable, newTxnChan, endingTxnChan)
+
 	addr := ":8080"
 
 	lastTxn, err := oplog.ReplayLog(tree)
@@ -99,12 +107,13 @@ func main() {
 					return
 				}
 
-				expiredRecord, err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
+				expiredRecord, err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot, transactionMap, siReadLockTable)
 				if err != nil {
 					oplog.WriteAbortToLog(txID)
 					tree.Abort(txn)
 					removeTxnData(txID, activeTransactions)
 					removeClientData(client, transactionManager)
+					endingTxnChan <- txID // Let SSI Table go routine know about ending txn
 					conn.WriteError("Txn Aborted On Expiration: " + err.Error())
 					return
 				}
@@ -113,7 +122,7 @@ func main() {
 					txn.DeletedRecords = append(txn.DeletedRecords, expiredRecord)
 				}
 
-				insertedRecord, err := tree.Set(string(cmd.Args[1]), string(cmd.Args[2]), txID, activeTxdSnapshot)
+				insertedRecord, err := tree.Set(string(cmd.Args[1]), string(cmd.Args[2]), txID, activeTxdSnapshot, transactionMap, siReadLockTable)
 				txn.InsertedRecords = append(txn.InsertedRecords, insertedRecord)
 
 				if singleRunTxn {
@@ -132,13 +141,14 @@ func main() {
 					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 					return
 				}
-				keyVal, err := tree.Get(string(cmd.Args[1]), txID, activeTxdSnapshot, transactionMap)
+				keyVal, err := tree.Get(string(cmd.Args[1]), txID, activeTxdSnapshot, transactionMap, siReadLockTable)
 				if err != nil {
 					if err.Error() == "Txn breaks Serializability" {
 						oplog.WriteAbortToLog(txID)
 						tree.Abort(txn)
 						removeTxnData(txID, activeTransactions)
 						removeClientData(client, transactionManager)
+						endingTxnChan <- txID // Let SSI Table go routine know about ending txn
 						conn.WriteError("Txn Aborted: " + err.Error())
 						return
 					}
@@ -157,12 +167,13 @@ func main() {
 					conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 					return
 				}
-				expiredRecord, err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot)
+				expiredRecord, err := tree.Expire(string(cmd.Args[1]), txID, activeTxdSnapshot, transactionMap, siReadLockTable)
 				if err != nil {
 					oplog.WriteAbortToLog(txID)
 					tree.Abort(txn)
 					removeTxnData(txID, activeTransactions)
 					removeClientData(client, transactionManager)
+					endingTxnChan <- txID // Let SSI Table go routine know about ending txn
 					conn.WriteError("Txn Aborted: " + err.Error())
 					return
 				}
@@ -193,6 +204,8 @@ func main() {
 				defer transactionMap.Unlock()
 				transactionMap.Transactions[txID] = txn
 
+				newTxnChan <- txID // Let SSI Table go routine know about new txn
+
 				conn.WriteString("OK")
 
 			case "commit":
@@ -203,6 +216,9 @@ func main() {
 				transactionManager.Lock()
 				defer transactionManager.Unlock()
 				delete(transactionManager.Transactions, client)
+
+				endingTxnChan <- txID // Let SSI Table go routine know about ending txn
+
 				conn.WriteString("OK")
 
 			case "print":
@@ -220,6 +236,8 @@ func main() {
 				// Remove txn from active txns and client mapping txns
 				removeTxnData(txID, activeTransactions)
 				removeClientData(client, transactionManager)
+
+				endingTxnChan <- txID // Let SSI Table go routine know about ending txn
 
 				conn.WriteError("Aborted txn from manual client call")
 

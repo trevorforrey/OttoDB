@@ -1,6 +1,7 @@
 package binTree
 
 import (
+	"OttoDB/server/ssi/ssiLockTable"
 	"OttoDB/server/store/record"
 	"OttoDB/server/transaction"
 	"errors"
@@ -41,7 +42,7 @@ func NewTree() *BinTree {
 	return &tree
 }
 
-func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]bool, txnMap *transaction.TransactionMap) (string, error) {
+func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]bool, txnMap *transaction.TransactionMap, siReadLockTable *ssiLockTable.SIReadKeyLockTable) (string, error) {
 	fmt.Printf("About to start tree search on %s\n", key)
 	getNode := tree.Search(tree.Root, key)
 	if getNode == nil {
@@ -57,11 +58,21 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 		currRecord := recordList[i]
 		if isVisible, isRWAntiDep := currRecord.IsVisible(timestamp, activeTxns); isVisible {
 			returnValue = currRecord.Value
+
+			// Add SI Read Lock on the key to SI Read Lock Table
+			if txnMap.Transactions[timestamp] != nil {
+				siReadLockTable.Lock()
+				locksOnKey := siReadLockTable.Table[key]
+				locksOnKey = append(locksOnKey, timestamp)
+				siReadLockTable.Table[key] = locksOnKey
+				siReadLockTable.Unlock()
+			}
+
 			// if reading an active delete (RW-AntiDep)
 			if isRWAntiDep && txnMap.Transactions[timestamp] != nil {
 				fmt.Printf("(expired) RW Dep out: %d", currRecord.ExpiredBy)
 				txnMap.Lock()
-				err := txnMap.AddRWAntiDepFlags(timestamp, currRecord.ExpiredBy)
+				err := txnMap.AddRWAntiDepFlagOut(timestamp, currRecord.ExpiredBy)
 				txnMap.Unlock()
 				if err != nil {
 					return "", err
@@ -71,7 +82,7 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 		} else if isRWAntiDep && txnMap.Transactions[timestamp] != nil {
 			fmt.Printf("(write) RW Dep out: %d", currRecord.CreatedBy)
 			txnMap.Lock()
-			err := txnMap.AddRWAntiDepFlags(timestamp, currRecord.CreatedBy)
+			err := txnMap.AddRWAntiDepFlagOut(timestamp, currRecord.CreatedBy)
 			txnMap.Unlock()
 			if err != nil {
 				return "", err
@@ -87,12 +98,12 @@ func (tree *BinTree) Get(key string, timestamp uint64, activeTxns map[uint64]boo
 	return "", errors.New("No value for provided timestamp")
 }
 
-func (tree *BinTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
+func (tree *BinTree) Set(key string, value string, timestamp uint64, activeTxns map[uint64]bool, txnMap *transaction.TransactionMap, siReadLockTable *ssiLockTable.SIReadKeyLockTable) (*record.Record, error) {
 
 	var newRecord = record.NewRecord(key, value, timestamp)
 	var singleRecordList = recordList{key: key, Records: []record.Record{newRecord}}
 
-	insertedRecord, err := tree.insert(key, singleRecordList, timestamp, activeTxns)
+	insertedRecord, err := tree.insert(key, singleRecordList, timestamp, activeTxns, txnMap, siReadLockTable)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +123,7 @@ func (tree *BinTree) Search(root *node, key string) *node {
 	}
 }
 
-func (tree *BinTree) insert(key string, singleRecordList recordList, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
+func (tree *BinTree) insert(key string, singleRecordList recordList, timestamp uint64, activeTxns map[uint64]bool, txnMap *transaction.TransactionMap, siReadLockTable *ssiLockTable.SIReadKeyLockTable) (*record.Record, error) {
 	newNode := node{}
 	newNode.Data = singleRecordList
 	var insertedRecord *record.Record
@@ -123,7 +134,7 @@ func (tree *BinTree) insert(key string, singleRecordList recordList, timestamp u
 	} else {
 		fmt.Println("calling to insert node")
 		var err error
-		insertedRecord, err = tree.iterativeInsert(tree.Root, &newNode, timestamp, activeTxns)
+		insertedRecord, err = tree.iterativeInsert(tree.Root, &newNode, timestamp, activeTxns, txnMap, siReadLockTable)
 		if err != nil {
 			return nil, err
 		}
@@ -131,7 +142,7 @@ func (tree *BinTree) insert(key string, singleRecordList recordList, timestamp u
 	return insertedRecord, nil
 }
 
-func (tree *BinTree) iterativeInsert(root *node, newNode *node, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
+func (tree *BinTree) iterativeInsert(root *node, newNode *node, timestamp uint64, activeTxns map[uint64]bool, txnMap *transaction.TransactionMap, siReadLockTable *ssiLockTable.SIReadKeyLockTable) (*record.Record, error) {
 	for {
 		if newNode.Data.key < root.Data.key {
 			if root.left == nil {
@@ -159,6 +170,24 @@ func (tree *BinTree) iterativeInsert(root *node, newNode *node, timestamp uint64
 				return nil, error
 			}
 
+			siReadLockTable.RLock()
+			txnsHoldingSIReadLockOnKey := siReadLockTable.Table[newNode.Data.key]
+			siReadLockTable.RUnlock()
+
+			// If there are txns holding an SIREAD lock on the key
+			if len(txnsHoldingSIReadLockOnKey) != 0 {
+				// Add RW AntiDependencies to the acting txns
+				txnMap.Lock()
+				for _, txn := range txnsHoldingSIReadLockOnKey {
+					err := txnMap.AddRWAntiDepFlagIn(txn, timestamp)
+					if err != nil {
+						txnMap.Unlock()
+						return nil, err
+					}
+				}
+				txnMap.Unlock()
+			}
+
 			fmt.Printf("\n%p", &root.Data.Records[0])
 			fmt.Printf("Capacity of record list is: %d", cap(root.Data.Records))
 			root.Data.Records = append(root.Data.Records, newNode.Data.Records[0]) // The culprit
@@ -177,7 +206,7 @@ func (tree *BinTree) getMinimum(currNode *node) *node {
 	return currNode
 }
 
-func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]bool) (*record.Record, error) {
+func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]bool, txnMap *transaction.TransactionMap, siReadLockTable *ssiLockTable.SIReadKeyLockTable) (*record.Record, error) {
 	delNode := tree.Search(tree.Root, key)
 	if delNode != nil {
 		delNode.Data.Lock()
@@ -188,6 +217,24 @@ func (tree *BinTree) Expire(key string, timestamp uint64, activeTxns map[uint64]
 
 		if isAlreadyEdited, error := delRecord.IsConcurrentEdited(timestamp, activeTxns); isAlreadyEdited {
 			return nil, error
+		}
+
+		siReadLockTable.RLock()
+		txnsHoldingSIReadLockOnKey := siReadLockTable.Table[key]
+		siReadLockTable.RUnlock()
+
+		// If there are txns holding an SIREAD lock on the key
+		if len(txnsHoldingSIReadLockOnKey) != 0 {
+			// Add RW AntiDependencies to the acting txns
+			txnMap.Lock()
+			for _, txn := range txnsHoldingSIReadLockOnKey {
+				err := txnMap.AddRWAntiDepFlagIn(txn, timestamp)
+				if err != nil {
+					txnMap.Unlock()
+					return nil, err
+				}
+			}
+			txnMap.Unlock()
 		}
 
 		delRecord.OldExpiredBy = delRecord.ExpiredBy
