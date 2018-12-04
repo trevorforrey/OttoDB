@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"OttoDB/server/oplog"
@@ -8,20 +8,17 @@ import (
 	"OttoDB/server/store/binTree"
 	"OttoDB/server/transaction"
 	"OttoDB/server/transactionManagers"
+	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"runtime"
 	"strings"
 	"sync/atomic"
 
 	"github.com/tidwall/redcon"
+	"github.com/tidwall/words"
 )
-
-type store interface {
-	Get() string
-	Set() string
-	Del() string
-}
 
 var (
 	tree               = binTree.NewTree()
@@ -32,8 +29,10 @@ var (
 	siReadLockTable    = ssiLockTable.NewSIReadKeyLockTable()
 )
 
-func main() {
+func RunServer() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
+	benchmarkingMode := flag.Bool("b", false, "allows OttoDB to process redis benchmarking requests")
+
 	newTxnChan := make(chan uint64)
 	endingTxnChan := make(chan uint64)
 
@@ -82,7 +81,14 @@ func main() {
 			activeTxdSnapshot := shapshotActiveTransactions(activeTransactions.ActiveTransactions)
 			activeTransactions.RUnlock()
 
-			operation, err := turnToOp(cmd, txID)
+			var operation *logprotobuf.Operation
+			var err error
+
+			if !*benchmarkingMode {
+				operation, err = turnToOp(cmd, txID)
+			} else {
+				operation, err = turnToBenchmarkOp(cmd, txID)
+			}
 			if err == nil {
 				oplog.WriteToLog(operation, txID)
 			}
@@ -302,6 +308,31 @@ func turnToOp(cmd redcon.Command, txID uint64) (*logprotobuf.Operation, error) {
 			Op:    string(cmd.Args[0]),
 			Key:   string(cmd.Args[1]),
 			Value: string(cmd.Args[2]),
+		}, nil
+	default:
+		return nil, fmt.Errorf("Unsupported command provided")
+	}
+}
+
+func turnToBenchmarkOp(cmd redcon.Command, txID uint64) (*logprotobuf.Operation, error) {
+	commandSize := len(cmd.Args)
+	switch commandSize {
+	case 1:
+		return &logprotobuf.Operation{
+			TxID: txID,
+			Op:   string(cmd.Args[0]),
+		}, nil
+	case 2:
+		return &logprotobuf.Operation{
+			TxID: txID,
+			Op:   string(cmd.Args[0]),
+			Key:  words.Words[rand.Intn(len(words.Words))],
+		}, nil
+	case 3:
+		return &logprotobuf.Operation{
+			TxID: txID,
+			Op:   words.Words[rand.Intn(len(words.Words))],
+			Key:  words.Words[rand.Intn(len(words.Words))],
 		}, nil
 	default:
 		return nil, fmt.Errorf("Unsupported command provided")
