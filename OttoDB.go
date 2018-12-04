@@ -12,8 +12,7 @@ import (
 
 func main() {
 
-	myFigure := figure.NewFigure("OttoDB", "isometric1", true)
-	myFigure.Print()
+	figure.NewFigure("OttoDB", "larry3d", true).Print()
 
 	sigs := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
