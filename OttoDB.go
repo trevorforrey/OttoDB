@@ -30,5 +30,5 @@ func main() {
 
 	fmt.Println("OttoDB Running at port 8080")
 	<-done
-	fmt.Println("Tah-tah!")
+	figure.NewFigure("Tah - Tah", "larry3d", true).Print()
 }
